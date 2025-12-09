@@ -64,6 +64,38 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // Handle clear certificate command (runs before loading full config)
+    if let Some(certificate_name) = &args.clear_certificate {
+        // Initialize minimal runtime for async operations
+        let rt = tokio::runtime::Runtime::new()
+            .context("Failed to create tokio runtime")?;
+
+        // Load minimal config for Redis connection
+        let config = Config::load_from_args(&args)
+            .context("Failed to load configuration")?;
+
+        // Initialize Redis if configured
+        if !config.redis.url.is_empty() {
+            rt.block_on(crate::redis::RedisManager::init(
+                &config.redis.url,
+                config.redis.prefix.clone(),
+                config.redis.ssl.as_ref(),
+            ))
+            .context("Failed to initialize Redis manager")?;
+        }
+
+        // Get certificate path from config
+        let certificate_path = config.pingora.proxy_certificates.unwrap_or_else(|| "/etc/synapse/certs".to_string());
+
+        // Clear the certificate
+        rt.block_on(crate::worker::certificate::clear_certificate(
+            certificate_name,
+            &certificate_path,
+        ))?;
+
+        return Ok(());
+    }
+
     // Validate required arguments when no config file is provided
     if args.config.is_none() {
         if args.arxignis_api_key.is_none() {

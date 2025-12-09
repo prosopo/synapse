@@ -283,8 +283,10 @@ async fn fetch_certificates_from_redis(certificate_path: &str, upstreams_path: &
         // Check in-memory cache first for local hash
         let hash_cache = get_certificate_hash_cache();
 
-        // Get file paths first - use certificate name for file naming
-        let sanitized_cert_name = cert_name.replace('.', "_").replace('*', "_");
+        // Get file paths first - use normalized certificate name for file naming
+        // This matches the filename format used by ACME (which uses normalized domain)
+        // ACME saves as: {sanitized_domain}.crt where domain is normalized (wildcard prefix removed)
+        let sanitized_cert_name = normalized_cert_name.replace('.', "_").replace('*', "_");
         let cert_path = cert_dir.join(format!("{}.crt", sanitized_cert_name));
         let key_path = cert_dir.join(format!("{}.key", sanitized_cert_name));
 
@@ -502,29 +504,21 @@ async fn fetch_certificates_from_redis(certificate_path: &str, upstreams_path: &
             (Some(_), None) => {
                 missing_count += 1;
                 log::warn!("Certificate fullchain found but private key missing in Redis for domain: {} (cert: {}, key: {})", domain, cert_name, privkey_key);
-                // Only request certificate if no certificate name is specified (i.e., use domain name)
-                if cert_name_opt.is_none() {
-                    if let Err(e) = request_certificate_from_acme(domain, normalized_cert_name, &certificate_path).await {
-                        log::warn!("Failed to request certificate from ACME for domain {}: {}", domain, e);
-                    } else {
-                        log::debug!("Successfully requested certificate from ACME for domain: {}", domain);
-                    }
+                // Request certificate from ACME using certificate name (with wildcard if configured)
+                if let Err(e) = request_certificate_from_acme(domain, normalized_cert_name, &certificate_path).await {
+                    log::warn!("Failed to request certificate from ACME for domain {}: {}", domain, e);
                 } else {
-                    log::debug!("Certificate name '{}' is specified for domain '{}', not requesting new certificate (certificate may be shared)", cert_name, domain);
+                    log::debug!("Successfully requested certificate from ACME for domain: {} (certificate: {})", domain, cert_name);
                 }
             }
             (None, Some(_)) => {
                 missing_count += 1;
                 log::warn!("Certificate private key found but fullchain missing in Redis for domain: {} (cert: {}, key: {})", domain, cert_name, fullchain_key);
-                // Only request certificate if no certificate name is specified (i.e., use domain name)
-                if cert_name_opt.is_none() {
-                    if let Err(e) = request_certificate_from_acme(domain, normalized_cert_name, &certificate_path).await {
-                        log::warn!("Failed to request certificate from ACME for domain {}: {}", domain, e);
-                    } else {
-                        log::debug!("Successfully requested certificate from ACME for domain: {}", domain);
-                    }
+                // Request certificate from ACME using certificate name (with wildcard if configured)
+                if let Err(e) = request_certificate_from_acme(domain, normalized_cert_name, &certificate_path).await {
+                    log::warn!("Failed to request certificate from ACME for domain {}: {}", domain, e);
                 } else {
-                    log::debug!("Certificate name '{}' is specified for domain '{}', not requesting new certificate (certificate may be shared)", cert_name, domain);
+                    log::debug!("Successfully requested certificate from ACME for domain: {} (certificate: {})", domain, cert_name);
                 }
             }
             (None, None) => {
@@ -532,11 +526,8 @@ async fn fetch_certificates_from_redis(certificate_path: &str, upstreams_path: &
                 log::warn!("Certificate not found in Redis for domain: {} (cert: {}, checked keys: fullchain='{}', privkey='{}')",
                     domain, cert_name, fullchain_key, privkey_key);
 
-                // Only request certificate if no certificate name is specified (i.e., use domain name)
-                // If a certificate name is specified, it means we should use an existing shared certificate
-                if cert_name_opt.is_none() {
-                    // Try to list matching keys to help debug
-                    let pattern = format!("{}:{}:*", prefix, normalized_cert_name);
+                // Try to list matching keys to help debug
+                let pattern = format!("{}:{}:*", prefix, normalized_cert_name);
                 let keys_result: Result<Vec<String>, _> = redis::cmd("KEYS")
                     .arg(&pattern)
                     .query_async(&mut connection)
@@ -554,14 +545,12 @@ async fn fetch_certificates_from_redis(certificate_path: &str, upstreams_path: &
                     }
                 }
 
-                    // Request certificate from ACME server if enabled
-                    if let Err(e) = request_certificate_from_acme(domain, normalized_cert_name, &certificate_path).await {
-                        log::warn!("Failed to request certificate from ACME for domain {}: {}", domain, e);
-                    } else {
-                        log::debug!("Successfully requested certificate from ACME for domain: {}", domain);
-                    }
+                // Request certificate from ACME server if enabled
+                // Use certificate name (with wildcard if configured) instead of hostname
+                if let Err(e) = request_certificate_from_acme(domain, normalized_cert_name, &certificate_path).await {
+                    log::warn!("Failed to request certificate from ACME for domain {}: {}", domain, e);
                 } else {
-                    log::debug!("Certificate name '{}' is specified for domain '{}', not requesting new certificate (certificate may be shared)", cert_name, domain);
+                    log::debug!("Successfully requested certificate from ACME for domain: {} (certificate: {})", domain, cert_name);
                 }
             }
         }
@@ -616,10 +605,24 @@ static ACME_CONFIG: once_cell::sync::OnceCell<Arc<std::sync::RwLock<Option<crate
 static UPSTREAMS_PATH: once_cell::sync::OnceCell<Arc<std::sync::RwLock<Option<String>>>> = once_cell::sync::OnceCell::new();
 
 /// Set the global ACME config (called from main.rs)
+/// Can be called multiple times to update the config at runtime
 pub fn set_acme_config(config: crate::cli::AcmeConfig) {
     let store = ACME_CONFIG.get_or_init(|| Arc::new(std::sync::RwLock::new(None)));
     let mut guard = store.write().unwrap();
+    let was_development = guard.as_ref().map(|c| c.development).unwrap_or(false);
+    let is_development = config.development;
+
+    // Extract values for logging before moving config
+    let enabled = config.enabled;
+    let port = config.port;
+
+    // Log if development mode changes
+    if was_development != is_development {
+        log::warn!("ACME development mode changed: {} -> {}. Existing certificates may have been issued with the previous mode. Consider clearing certificates and restarting.", was_development, is_development);
+    }
+
     *guard = Some(config);
+    log::info!("ACME config updated: enabled={}, development={}, port={}", enabled, is_development, port);
 }
 
 /// Set the global upstreams path (called from certificate worker)
@@ -660,7 +663,15 @@ pub async fn request_certificate_from_acme(
 
     // Check if ACME is enabled
     let acme_config = match get_acme_config().await {
-        Some(config) if config.enabled => config,
+        Some(config) if config.enabled => {
+            // Log which ACME server will be used
+            if config.development {
+                log::warn!("ACME development mode is ENABLED - certificates will be issued from Let's Encrypt STAGING server (not trusted by browsers)");
+            } else {
+                log::info!("ACME development mode is DISABLED - certificates will be issued from Let's Encrypt PRODUCTION server");
+            }
+            config
+        },
         Some(_) => {
             log::debug!("ACME is disabled, skipping certificate request for domain: {}", domain);
             return Ok(());
@@ -689,19 +700,53 @@ pub async fn request_certificate_from_acme(
     let upstreams_path = get_upstreams_path().await
         .unwrap_or_else(|| "/root/synapse/upstreams.yaml".to_string());
 
-    let (use_dns, domain_email) = {
-
-        // Try to read challenge type from upstreams.yaml
+    // Determine the domain to request from ACME
+    // If normalized_domain is different from domain, it means a certificate name was specified
+    // In that case, we should request the certificate for the certificate domain, not the hostname
+    let (acme_domain, use_dns, domain_email, is_wildcard) = {
+        // Try to read challenge type and certificate config from upstreams.yaml
         if let Ok(yaml_content) = tokio::fs::read_to_string(&upstreams_path).await {
             if let Ok(parsed) = serde_yaml::from_str::<crate::utils::structs::Config>(&yaml_content) {
                 if let Some(upstreams) = &parsed.upstreams {
                     if let Some(host_config) = upstreams.get(domain) {
+                        // Check if a certificate name is specified (different from domain)
+                        let cert_name_opt = host_config.certificate.as_ref();
+                        let acme_wildcard = host_config.acme.as_ref()
+                            .map(|a| a.wildcard)
+                            .unwrap_or(false);
+
+                        // Determine the domain to request from ACME
+                        // If certificate name is specified and wildcard is true, request *.certificate_name
+                        // Otherwise, if certificate name is specified, use it as-is
+                        // If no certificate name, use the hostname domain
+                        let requested_domain = if let Some(cert_name) = cert_name_opt {
+                            // Certificate name is specified - use it for ACME request
+                            if acme_wildcard && !cert_name.starts_with("*.") {
+                                // Wildcard is set in config - request *.certificate_name
+                                format!("*.{}", cert_name)
+                            } else if cert_name.starts_with("*.") {
+                                // Certificate name already has wildcard prefix
+                                cert_name.clone()
+                            } else {
+                                // Certificate name without wildcard
+                                cert_name.clone()
+                            }
+                        } else {
+                            // No certificate name specified - use hostname domain
+                            if acme_wildcard && !domain.starts_with("*.") {
+                                // Wildcard is set but domain doesn't have *. prefix
+                                format!("*.{}", normalized_domain)
+                            } else {
+                                domain.to_string()
+                            }
+                        };
+
                         // Get challenge type from ACME config in upstreams
                         let challenge_type = if let Some(acme_cfg) = &host_config.acme {
                             acme_cfg.challenge_type.clone()
                         } else {
                             // Auto-detect: DNS-01 for wildcard, HTTP-01 otherwise
-                            if domain.starts_with("*.") {
+                            if requested_domain.starts_with("*.") || acme_wildcard {
                                 "dns-01".to_string()
                             } else {
                                 "http-01".to_string()
@@ -713,28 +758,66 @@ pub async fn request_certificate_from_acme(
                             .and_then(|a| a.email.clone())
                             .or_else(|| Some(email.clone()));
 
-                        log::debug!("Using challenge type '{}' for domain {} (from upstreams.yaml)", challenge_type, domain);
-                        (use_dns, domain_email)
+                        let is_wildcard = requested_domain.starts_with("*.") || acme_wildcard;
+
+                        log::info!("ACME request: hostname={}, certificate={:?}, requested_domain={}, wildcard={}, challenge={}",
+                            domain, cert_name_opt, requested_domain, is_wildcard, challenge_type);
+                        (requested_domain, use_dns, domain_email, is_wildcard)
                     } else {
                         // Domain not found in upstreams, auto-detect
-                        let is_wildcard = domain.starts_with("*.");
-                        log::info!("Domain {} not found in upstreams.yaml, auto-detecting challenge type (wildcard: {})", domain, is_wildcard);
-                        (is_wildcard, Some(email.clone()))
+                        // If normalized_domain != domain, it means a certificate name was passed
+                        let is_wildcard = domain.starts_with("*.") || normalized_domain != domain;
+                        let requested_domain = if domain.starts_with("*.") {
+                            domain.to_string()
+                        } else if normalized_domain != domain {
+                            // Certificate name was specified - assume wildcard
+                            format!("*.{}", normalized_domain)
+                        } else {
+                            domain.to_string()
+                        };
+                        let use_dns = is_wildcard; // Use DNS-01 for wildcard certificates
+                        log::info!("Domain {} not found in upstreams.yaml, auto-detecting (requested: {}, wildcard: {}, dns: {})",
+                            domain, requested_domain, is_wildcard, use_dns);
+                        (requested_domain, use_dns, Some(email.clone()), is_wildcard)
                     }
                 } else {
                     // No upstreams, auto-detect
-                    let is_wildcard = domain.starts_with("*.");
-                    (is_wildcard, Some(email.clone()))
+                    let is_wildcard = domain.starts_with("*.") || normalized_domain != domain;
+                    let requested_domain = if domain.starts_with("*.") {
+                        domain.to_string()
+                    } else if normalized_domain != domain {
+                        format!("*.{}", normalized_domain)
+                    } else {
+                        domain.to_string()
+                    };
+                    let use_dns = is_wildcard;
+                    (requested_domain, use_dns, Some(email.clone()), is_wildcard)
                 }
             } else {
                 // Failed to parse, auto-detect
-                let is_wildcard = domain.starts_with("*.");
-                (is_wildcard, Some(email.clone()))
+                let is_wildcard = domain.starts_with("*.") || normalized_domain != domain;
+                let requested_domain = if domain.starts_with("*.") {
+                    domain.to_string()
+                } else if normalized_domain != domain {
+                    format!("*.{}", normalized_domain)
+                } else {
+                    domain.to_string()
+                };
+                let use_dns = is_wildcard;
+                (requested_domain, use_dns, Some(email.clone()), is_wildcard)
             }
         } else {
             // Failed to read, auto-detect
-            let is_wildcard = domain.starts_with("*.");
-            (is_wildcard, Some(email.clone()))
+            let is_wildcard = domain.starts_with("*.") || normalized_domain != domain;
+            let requested_domain = if domain.starts_with("*.") {
+                domain.to_string()
+            } else if normalized_domain != domain {
+                format!("*.{}", normalized_domain)
+            } else {
+                domain.to_string()
+            };
+            let use_dns = is_wildcard;
+            (requested_domain, use_dns, Some(email.clone()), is_wildcard)
         }
     };
 
@@ -747,9 +830,6 @@ pub async fn request_certificate_from_acme(
     let mut key_path = domain_storage_path.clone();
     key_path.push("key.pem");
     let static_path = domain_storage_path.clone();
-
-    // Determine if this is a wildcard domain
-    let is_wildcard = domain.starts_with("*.");
 
     // Get Redis SSL config if available
     let redis_ssl = crate::redis::RedisManager::get()
@@ -768,7 +848,7 @@ pub async fn request_certificate_from_acme(
         opts: ConfigOpts {
             ip: "127.0.0.1".to_string(),
             port: acme_config.port,
-            domain: domain.to_string(),
+            domain: acme_domain.clone(),
             email: domain_email,
             https_dns: use_dns,
             development: acme_config.development,
@@ -786,13 +866,13 @@ pub async fn request_certificate_from_acme(
     };
 
     // Request certificate from ACME
-    log::debug!("Requesting certificate from ACME for domain: {} (wildcard: {}, dns: {})",
-        domain, is_wildcard, use_dns);
+    log::info!("Requesting certificate from ACME: hostname={} -> certificate_domain={} (wildcard: {}, dns: {})",
+        domain, acme_domain, is_wildcard, use_dns);
 
     request_cert(&acme_config_internal).await
-        .context(format!("Failed to request certificate from ACME for domain: {}", domain))?;
+        .context(format!("Failed to request certificate from ACME for hostname: {} (requested domain: {})", domain, acme_domain))?;
 
-    log::debug!("Certificate requested successfully from ACME for domain: {}. It will be available in Redis after processing.", domain);
+    log::info!("Certificate requested successfully from ACME: hostname={}, certificate_domain={}. It will be available in Redis after processing.", domain, acme_domain);
 
     // After requesting, the certificate should be in Redis (if using Redis storage)
     // The next refresh cycle will pick it up automatically
@@ -926,6 +1006,152 @@ async fn check_and_renew_expiring_certificates(upstreams_path: &str) -> Result<(
     }
 
     log::info!("Certificate expiration check completed: {} checked, {} renewed", checked_count, renewed_count);
+
+    Ok(())
+}
+
+/// Clear a specific certificate from both local filesystem and Redis
+/// certificate_name: The certificate name (e.g., "kapnative.developnet.hu" or "*.kapnative.developnet.hu")
+/// certificate_path: The path where certificates are stored locally
+pub async fn clear_certificate(certificate_name: &str, certificate_path: &str) -> Result<()> {
+    // Normalize certificate name (remove wildcard prefix if present)
+    let normalized_cert_name = certificate_name.strip_prefix("*.").unwrap_or(certificate_name);
+
+    // Sanitize certificate name for file naming (matches the format used when saving)
+    let sanitized_cert_name = normalized_cert_name.replace('.', "_").replace('*', "_");
+
+    let cert_dir = std::path::Path::new(certificate_path);
+    let cert_path = cert_dir.join(format!("{}.crt", sanitized_cert_name));
+    let key_path = cert_dir.join(format!("{}.key", sanitized_cert_name));
+
+    log::info!("Clearing certificate: {} (normalized: {}, sanitized: {})",
+        certificate_name, normalized_cert_name, sanitized_cert_name);
+
+    // Delete local certificate files
+    let mut deleted_local = false;
+    if cert_path.exists() {
+        match std::fs::remove_file(&cert_path) {
+            Ok(_) => {
+                log::info!("Deleted local certificate file: {}", cert_path.display());
+                deleted_local = true;
+            }
+            Err(e) => {
+                log::warn!("Failed to delete local certificate file {}: {}", cert_path.display(), e);
+            }
+        }
+    } else {
+        log::debug!("Local certificate file does not exist: {}", cert_path.display());
+    }
+
+    if key_path.exists() {
+        match std::fs::remove_file(&key_path) {
+            Ok(_) => {
+                log::info!("Deleted local key file: {}", key_path.display());
+                deleted_local = true;
+            }
+            Err(e) => {
+                log::warn!("Failed to delete local key file {}: {}", key_path.display(), e);
+            }
+        }
+    } else {
+        log::debug!("Local key file does not exist: {}", key_path.display());
+    }
+
+    // Clear from in-memory hash cache
+    let hash_cache = get_certificate_hash_cache();
+    {
+        let mut cache = hash_cache.write().await;
+        cache.remove(certificate_name);
+        log::debug!("Removed certificate hash from in-memory cache: {}", certificate_name);
+    }
+
+    // Delete from Redis
+    let redis_manager = match RedisManager::get() {
+        Ok(rm) => rm,
+        Err(e) => {
+            log::warn!("Redis manager not initialized, skipping Redis deletion: {}", e);
+            if deleted_local {
+                log::info!("Certificate cleared from local filesystem only (Redis not available)");
+            }
+            return Ok(());
+        }
+    };
+
+    let mut connection = redis_manager.get_connection();
+    let prefix = redis_manager.get_prefix();
+
+    // Delete all certificate-related keys from Redis
+    // This includes all live certificates, metadata, and failure tracking
+    let keys_to_delete = vec![
+        // Live certificate files
+        format!("{}:{}:live:fullchain", prefix, normalized_cert_name),
+        format!("{}:{}:live:privkey", prefix, normalized_cert_name),
+        format!("{}:{}:live:cert", prefix, normalized_cert_name),
+        format!("{}:{}:live:chain", prefix, normalized_cert_name),
+        // Metadata keys
+        format!("{}:{}:metadata:certificate_hash", prefix, normalized_cert_name),
+        format!("{}:{}:metadata:created_at", prefix, normalized_cert_name),
+        format!("{}:{}:metadata:cert_failure", prefix, normalized_cert_name),
+        format!("{}:{}:metadata:cert_failure_count", prefix, normalized_cert_name),
+    ];
+
+    let mut deleted_redis = 0;
+    for key in &keys_to_delete {
+        match redis::cmd("DEL").arg(key).query_async::<u64>(&mut connection).await {
+            Ok(count) => {
+                if count > 0 {
+                    log::info!("Deleted Redis key: {}", key);
+                    deleted_redis += count;
+                } else {
+                    log::debug!("Redis key does not exist: {}", key);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to delete Redis key {}: {}", key, e);
+            }
+        }
+    }
+
+    // Also try to delete any archived certificates, challenge keys, lock keys, etc. (if they exist)
+    let patterns_to_clean = vec![
+        format!("{}:{}:archive:*", prefix, normalized_cert_name),
+        format!("{}:{}:challenge:*", prefix, normalized_cert_name),
+        format!("{}:{}:dns-challenge", prefix, normalized_cert_name),
+        format!("{}:{}:lock", prefix, normalized_cert_name),
+    ];
+
+    for pattern in &patterns_to_clean {
+        match redis::cmd("KEYS").arg(pattern).query_async::<Vec<String>>(&mut connection).await {
+            Ok(keys) => {
+                if !keys.is_empty() {
+                    log::info!("Found {} key(s) matching pattern '{}', deleting...", keys.len(), pattern);
+                    for key in &keys {
+                        match redis::cmd("DEL").arg(key).query_async::<u64>(&mut connection).await {
+                            Ok(count) => {
+                                if count > 0 {
+                                    log::info!("Deleted Redis key: {}", key);
+                                    deleted_redis += count;
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to delete Redis key {}: {}", key, e);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::debug!("Failed to list keys matching pattern '{}' (this is OK if none exist): {}", pattern, e);
+            }
+        }
+    }
+
+    if deleted_local || deleted_redis > 0 {
+        log::info!("Successfully cleared certificate '{}': deleted {} local file(s), {} Redis key(s)",
+            certificate_name, if deleted_local { 2 } else { 0 }, deleted_redis);
+    } else {
+        log::warn!("Certificate '{}' not found in local filesystem or Redis", certificate_name);
+    }
 
     Ok(())
 }
