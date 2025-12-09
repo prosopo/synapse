@@ -136,6 +136,15 @@ pub struct Gen0SecConfig {
     pub api_key: String,
     #[serde(default = "default_base_url")]
     pub base_url: String,
+    /// URL to the threat-intel MMDB file 
+    #[serde(default)]
+    pub threat_mmdb_url: String,
+    /// Optional local path to store/read the MMDB file instead of memory-only
+    #[serde(default)]
+    pub threat_mmdb_path: Option<PathBuf>,
+    /// How often to refresh the MMDB from the remote URL (seconds). 0/None = only at startup.
+    #[serde(default = "default_threat_mmdb_refresh_secs")]
+    pub threat_mmdb_refresh_secs: u64,
     #[serde(default = "default_log_sending_enabled")]
     pub log_sending_enabled: bool,
     #[serde(default = "default_include_response_body")]
@@ -148,6 +157,10 @@ pub struct Gen0SecConfig {
 
 fn default_base_url() -> String {
     "https://api.gen0sec.com/v1".to_string()
+}
+
+fn default_threat_mmdb_refresh_secs() -> u64 {
+    300
 }
 
 fn default_log_sending_enabled() -> bool {
@@ -229,6 +242,9 @@ impl Config {
             arxignis: Gen0SecConfig {
                 api_key: "".to_string(),
                 base_url: "https://api.gen0sec.com/v1".to_string(),
+                threat_mmdb_url: "".to_string(),
+                threat_mmdb_path: None,
+                threat_mmdb_refresh_secs: 0,
                 log_sending_enabled: true,
                 include_response_body: true,
                 max_body_size: 1024 * 1024, // 1MB

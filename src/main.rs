@@ -531,13 +531,18 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
         }
 
         // Initialize threat intelligence client
-        if let Err(e) = threat::init_threat_client(
-            config.arxignis.base_url.clone(),
-            config.arxignis.api_key.clone(),
-        ).await {
-            log::warn!("Failed to initialize threat client: {}", e);
+        if !config.arxignis.threat_mmdb_url.is_empty() {
+            if let Err(e) = threat::init_threat_client(
+                config.arxignis.threat_mmdb_url.clone(),
+                config.arxignis.threat_mmdb_path.clone(),
+                config.arxignis.threat_mmdb_refresh_secs,
+            ).await {
+                log::warn!("Failed to initialize threat client: {}", e);
+            } else {
+                log::info!("Threat intelligence client initialized (MMDB)");
+            }
         } else {
-            log::info!("Threat intelligence client initialized");
+            log::warn!("Threat intelligence MMDB URL not configured; threat lookups disabled");
         }
 
         // Initialize captcha client if configuration is provided
