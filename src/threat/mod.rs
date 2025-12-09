@@ -6,7 +6,6 @@ use maxminddb::{MaxMindDBError, Reader};
 use pingora_memory_cache::MemoryCache;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::{OnceCell, RwLock};
-use tokio::time;
 
 use crate::http_client::get_global_reqwest_client;
 
@@ -127,22 +126,20 @@ pub struct ThreatClient {
     mmdb_path: Option<PathBuf>,
     reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
     pingora_cache: Arc<MemoryCache<String, ThreatResponse>>,
-    refresh_interval: Option<Duration>,
 }
 
 impl ThreatClient {
-    pub fn new(mmdb_url: String, mmdb_path: Option<PathBuf>, refresh_secs: u64) -> Self {
+    pub fn new(mmdb_url: String, mmdb_path: Option<PathBuf>) -> Self {
         Self {
             mmdb_url,
             mmdb_path,
             reader: RwLock::new(None),
             pingora_cache: Arc::new(MemoryCache::new(10_000)),
-            refresh_interval: if refresh_secs > 0 {
-                Some(Duration::from_secs(refresh_secs))
-            } else {
-                None
-            },
         }
+    }
+
+    pub async fn refresh(&self) -> Result<()> {
+        self.refresh_reader().await.map(|_| ())
     }
 
     /// Get threat intelligence for an IP address with in-memory caching
@@ -368,34 +365,26 @@ static THREAT_CLIENT: OnceCell<Arc<ThreatClient>> = OnceCell::const_new();
 pub async fn init_threat_client(
     mmdb_url: String,
     mmdb_path: Option<PathBuf>,
-    refresh_secs: u64,
 ) -> Result<()> {
-    let client = Arc::new(ThreatClient::new(mmdb_url, mmdb_path, refresh_secs));
+    let client = Arc::new(ThreatClient::new(mmdb_url, mmdb_path));
 
     // Load immediately so errors show up at startup
     client.refresh_reader().await?;
-
-    // Spawn a background refresh loop if configured
-    if let Some(interval) = client.refresh_interval {
-        let client_clone = client.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(interval);
-            loop {
-                ticker.tick().await;
-                if let Err(e) = client_clone.refresh_reader().await {
-                    log::warn!("Threat MMDB refresh failed: {}", e);
-                } else {
-                    log::info!("Threat MMDB refreshed");
-                }
-            }
-        });
-    }
 
     THREAT_CLIENT
         .set(client)
         .map_err(|_| anyhow::anyhow!("Failed to initialize threat client"))?;
 
     Ok(())
+}
+
+/// Trigger an immediate MMDB refresh (used by worker)
+pub async fn refresh_threat_mmdb() -> Result<()> {
+    let client = THREAT_CLIENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+
+    client.refresh().await
 }
 
 /// Get threat intelligence for an IP address
