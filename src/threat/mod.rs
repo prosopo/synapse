@@ -1,8 +1,8 @@
 use std::{net::IpAddr, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use maxminddb::{MaxMindDBError, Reader};
+use maxminddb::{geoip2, MaxMindDBError, Reader};
 use pingora_memory_cache::MemoryCache;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::{OnceCell, RwLock};
@@ -28,7 +28,7 @@ where
     }
 }
 
-/// Threat intelligence response (compatible with previous REST shape)
+/// Threat intelligence response (REST shape)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreatResponse {
     pub schema_version: String,
@@ -98,42 +98,36 @@ impl From<&ThreatResponse> for WafFields {
     }
 }
 
-/// Raw record as written into the MMDB
-#[derive(Debug, Deserialize)]
-struct MmdbThreatRecord {
-    action: Option<String>,
-    score: Option<i32>,
-    reason_code: Option<String>,
-    description: Option<String>,
-    rule_id: Option<String>,
-    rule_name: Option<String>,
-    source_tag_names: Option<Vec<String>>,
-    country: Option<String>,
-    iso_code: Option<String>,
-    asn: Option<i32>,
-    asniso_code: Option<String>,
-    asn_org: Option<String>,
-    num_sources: Option<i32>,
-    expiration: Option<i32>,
-    created_at: Option<String>,
-    updated_at: Option<String>,
-    scored_at: Option<String>,
-}
-
-/// Threat intelligence client backed by an MMDB file and in-memory cache
+/// Threat intel client: REST API first, GeoIP MMDB fallback, in-memory cache only
 pub struct ThreatClient {
-    mmdb_url: String,
+    api_base_url: String,
+    api_key: String,
+    mmdb_base_url: String,
+    versions_url: Option<String>,
     mmdb_path: Option<PathBuf>,
     reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
+    current_version: RwLock<Option<String>>,
+    current_path: RwLock<Option<PathBuf>>,
     pingora_cache: Arc<MemoryCache<String, ThreatResponse>>,
 }
 
 impl ThreatClient {
-    pub fn new(mmdb_url: String, mmdb_path: Option<PathBuf>) -> Self {
+    pub fn new(
+        api_base_url: String,
+        api_key: String,
+        mmdb_base_url: String,
+        versions_url: Option<String>,
+        mmdb_path: Option<PathBuf>,
+    ) -> Self {
         Self {
-            mmdb_url,
+            api_base_url,
+            api_key,
+            mmdb_base_url,
+            versions_url,
             mmdb_path,
             reader: RwLock::new(None),
+            current_version: RwLock::new(None),
+            current_path: RwLock::new(None),
             pingora_cache: Arc::new(MemoryCache::new(10_000)),
         }
     }
@@ -142,26 +136,24 @@ impl ThreatClient {
         self.refresh_reader().await.map(|_| ())
     }
 
-    /// Get threat intelligence for an IP address with in-memory caching
+    /// Get threat intelligence for an IP address with caching and GeoIP fallback
     pub async fn get_threat_intel(&self, ip: &str) -> Result<Option<ThreatResponse>> {
-        // Check pingora-memory-cache
-        let (cached_data, status) = self.pingora_cache.get(ip);
-        if let Some(data) = cached_data {
+        // L1 cache
+        let (cached, status) = self.pingora_cache.get(ip);
+        if let Some(data) = cached {
             if status.is_hit() {
                 log::debug!("Threat data for {} found in pingora-memory-cache", ip);
                 return Ok(Some(data));
             }
         }
 
-        // Ensure the MMDB is loaded
-        let reader = match self.ensure_reader().await {
-            Ok(r) => r,
-            Err(e) => {
-                log::error!("Failed to load threat MMDB: {}", e);
-                return Ok(None);
-            }
-        };
+        // REST API first
+        if let Some(api_data) = self.fetch_from_api(ip).await? {
+            self.set_pingora_cache(ip, &api_data).await;
+            return Ok(Some(api_data));
+        }
 
+        // GeoIP fallback
         let ip_addr: IpAddr = match ip.parse() {
             Ok(v) => v,
             Err(e) => {
@@ -170,38 +162,9 @@ impl ThreatClient {
             }
         };
 
-        // Perform MMDB lookup off the async runtime
-        let lookup_result = tokio::task::spawn_blocking(move || {
-            reader
-                .lookup::<MmdbThreatRecord>(ip_addr)
-                .map(Some)
-                .or_else(|e| match e {
-                    MaxMindDBError::AddressNotFoundError(_) => Ok(None),
-                    other => Err(other),
-                })
-        })
-        .await
-        .context("MMDB lookup task failed")?;
-
-        let record = match lookup_result {
-            Ok(rec) => rec,
-            Err(e) => {
-                log::error!("MMDB lookup error for {}: {}", ip, e);
-                return Ok(None);
-            }
-        };
-
-        let Some(record) = record else {
-            return Ok(None);
-        };
-
-        log::debug!("Threat MMDB hit for {}", ip);
-
-        let response = self.build_response(ip, ip_addr, record)?;
-
-        // Store in pingora-memory-cache for faster access (L1 only)
+        let (geo, asn, org) = self.lookup_geo(ip_addr).await?;
+        let response = build_no_data_response(ip, ip_addr, geo, asn, org);
         self.set_pingora_cache(ip, &response).await;
-
         Ok(Some(response))
     }
 
@@ -214,74 +177,46 @@ impl ThreatClient {
         }
     }
 
-    /// Build a ThreatResponse from the MMDB record
-    fn build_response(
-        &self,
-        ip: &str,
-        ip_addr: IpAddr,
-        record: MmdbThreatRecord,
-    ) -> Result<ThreatResponse> {
-        let ttl = record.expiration.unwrap_or(300).max(1) as u64;
+    async fn fetch_from_api(&self, ip: &str) -> Result<Option<ThreatResponse>> {
+        if self.api_base_url.is_empty() || self.api_key.is_empty() {
+            return Ok(None);
+        }
 
-        let score = record.score.unwrap_or(0).max(0) as u32;
-        let confidence = (score as f64 / 100.0).clamp(0.0, 1.0);
+        let url = format!("{}/threat?ip={}", self.api_base_url.trim_end_matches('/'), ip);
+        let client = get_global_reqwest_client()
+            .context("Failed to get global HTTP client")?;
 
-        let (first_seen, last_seen) = (
-            parse_optional_datetime(record.created_at.as_deref()),
-            parse_optional_datetime(record.updated_at.as_deref()),
-        );
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", &self.api_key))
+            .send()
+            .await
+            .context("Failed to send HTTP request")?;
 
-        let advice = map_action_to_advice(record.action.as_deref());
+        if response.status() == 404 {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_else(|_| "Unable to read response body".to_string());
+            log::error!("API request failed with status: {}, body: {}", status, body);
+            return Ok(None);
+        }
 
-        let geo = GeoInfo {
-            country: record.country.unwrap_or_default(),
-            iso_code: record.iso_code.unwrap_or_default(),
-            asn_iso_code: record.asniso_code.unwrap_or_default(),
-        };
+        let response_text = response.text().await
+            .context("Failed to read response body")?;
 
-        let response = ThreatResponse {
-            schema_version: "1.0".to_string(),
-            tenant_id: "mmdb".to_string(),
-            ip: ip.to_string(),
-            intel: ThreatIntel {
-                score,
-                confidence,
-                score_version: "mmdb".to_string(),
-                categories: record
-                    .source_tag_names
-                    .clone()
-                    .unwrap_or_default(),
-                tags: record.source_tag_names.unwrap_or_default(),
-                first_seen,
-                last_seen,
-                source_count: record.num_sources.unwrap_or(0).max(0) as u32,
-                reason_code: record
-                    .reason_code
-                    .unwrap_or_else(|| "NO_DATA".to_string()),
-                reason_summary: record
-                    .description
-                    .unwrap_or_else(|| "No threat data available".to_string()),
-                rule_id: record.rule_id.unwrap_or_else(|| "none".to_string()),
-            },
-            context: ThreatContext {
-                asn: record.asn.unwrap_or(0).max(0) as u32,
-                org: record.asn_org.unwrap_or_default(),
-                ip_version: if ip_addr.is_ipv4() { 4 } else { 6 },
-                geo,
-            },
-            advice,
-            ttl_s: ttl,
-            generated_at: Utc::now(),
-        };
+        let threat_data: ThreatResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse JSON response")?;
 
-        Ok(response)
+        Ok(Some(threat_data))
     }
 
     /// Download (or read) the MMDB and keep it in memory
     async fn refresh_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
-        let data = self.fetch_mmdb_bytes().await?;
+        let (version_opt, data, target_path) = self.fetch_mmdb_bytes().await?;
 
-        if let Some(path) = &self.mmdb_path {
+        if let Some(path) = &target_path {
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
@@ -302,6 +237,21 @@ impl ThreatClient {
         let mut guard = self.reader.write().await;
         *guard = Some(arc.clone());
 
+        if let Some(ver) = version_opt {
+            let mut vguard = self.current_version.write().await;
+            *vguard = Some(ver);
+        }
+        if let Some(path) = target_path {
+            let mut pguard = self.current_path.write().await;
+            let old = pguard.replace(path.clone());
+            drop(pguard);
+            if let Some(old_path) = old {
+                if old_path != path {
+                    let _ = tokio::fs::remove_file(old_path).await;
+                }
+            }
+        }
+
         Ok(arc)
     }
 
@@ -317,37 +267,105 @@ impl ThreatClient {
         self.refresh_reader().await
     }
 
-    async fn fetch_mmdb_bytes(&self) -> Result<Vec<u8>> {
-        // If the URL looks like HTTP(S), download it; otherwise treat as local path
-        if self.mmdb_url.starts_with("http://") || self.mmdb_url.starts_with("https://") {
-            let client = get_global_reqwest_client()
-                .context("Failed to get HTTP client for MMDB download")?;
+    async fn lookup_geo(&self, ip: IpAddr) -> Result<(GeoInfo, u32, String)> {
+        // ASN lookup (extract owned data inside blocking task)
+        let reader = self.ensure_reader().await?;
+        let (asn_num, asn_org) = tokio::task::spawn_blocking({
+            let reader = reader.clone();
+            move || -> Result<(u32, String), MaxMindDBError> {
+                let res: geoip2::Asn = reader.lookup(ip)?;
+                Ok((
+                    res.autonomous_system_number.unwrap_or(0),
+                    res.autonomous_system_organization.unwrap_or("").to_string(),
+                ))
+            }
+        })
+        .await??;
 
+        // Country lookup (owned iso and name)
+        let reader2 = self.ensure_reader().await?;
+        let (iso, country_name) = tokio::task::spawn_blocking({
+            let reader = reader2.clone();
+            move || -> Result<(String, String), MaxMindDBError> {
+                let country: geoip2::Country = reader.lookup(ip)?;
+                let iso = country
+                    .country
+                    .as_ref()
+                    .and_then(|c| c.iso_code)
+                    .unwrap_or("")
+                    .to_string();
+                let country_name = country
+                    .country
+                    .as_ref()
+                    .and_then(|c| c.names.as_ref())
+                    .and_then(|n| n.get("en"))
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                Ok((iso, country_name))
+            }
+        })
+        .await??;
+
+        Ok((
+            GeoInfo {
+                country: country_name,
+                iso_code: iso.clone(),
+                asn_iso_code: iso,
+            },
+            asn_num,
+            asn_org,
+        ))
+    }
+
+    async fn fetch_mmdb_bytes(&self) -> Result<(Option<String>, Vec<u8>, Option<PathBuf>)> {
+        // If versions URL is provided, resolve latest first
+        if let Some(vurl) = &self.versions_url {
+            let client = get_global_reqwest_client()
+                .context("Failed to get HTTP client for versions download")?;
             let resp = client
-                .get(&self.mmdb_url)
+                .get(vurl)
                 .send()
                 .await
-                .with_context(|| format!("Failed to download MMDB from {}", self.mmdb_url))?;
-
+                .with_context(|| format!("Failed to download versions file from {}", vurl))?;
             let status = resp.status();
             if !status.is_success() {
                 return Err(anyhow::anyhow!(
-                    "MMDB download failed: status {} from {}",
+                    "Versions download failed: status {} from {}",
                     status,
-                    self.mmdb_url
+                    vurl
                 ));
             }
+            let text = resp.text().await.context("Failed to read versions body")?;
+            let latest = parse_latest_version(&text)
+                .ok_or_else(|| anyhow!("Failed to parse latest version from versions file"))?;
+            let base = self.mmdb_base_url.trim_end_matches('/');
 
-            let bytes = resp
-                .bytes()
-                .await
-                .context("Failed to read MMDB response body")?;
+            if base.starts_with("http://") || base.starts_with("https://") {
+                let url = format!("{}/{}", base, latest);
+                let bytes = download_mmdb(&url).await?;
+                let target_path = compute_target_path(self.mmdb_path.clone(), Some(&latest));
+                return Ok((Some(latest), bytes, target_path));
+            } else {
+                let local_path = PathBuf::from(base).join(&latest);
+                let bytes = tokio::fs::read(&local_path)
+                    .await
+                    .with_context(|| format!("Failed to read MMDB from {:?}", local_path))?;
+                let target_path = compute_target_path(self.mmdb_path.clone(), Some(&latest));
+                return Ok((Some(latest), bytes, target_path));
+            }
+        }
 
-            Ok(bytes.to_vec())
+        // Fallback: single static URL/path
+        if self.mmdb_base_url.starts_with("http://") || self.mmdb_base_url.starts_with("https://") {
+            let bytes = download_mmdb(&self.mmdb_base_url).await?;
+            let target_path = compute_target_path(self.mmdb_path.clone(), None);
+            Ok((None, bytes, target_path))
         } else {
-            tokio::fs::read(&self.mmdb_url)
+            let bytes = tokio::fs::read(&self.mmdb_base_url)
                 .await
-                .with_context(|| format!("Failed to read MMDB from {}", self.mmdb_url))
+                .with_context(|| format!("Failed to read MMDB from {}", self.mmdb_base_url))?;
+            let target_path = compute_target_path(self.mmdb_path.clone(), None);
+            Ok((None, bytes, target_path))
         }
     }
 
@@ -363,10 +381,13 @@ static THREAT_CLIENT: OnceCell<Arc<ThreatClient>> = OnceCell::const_new();
 
 /// Initialize the global threat client
 pub async fn init_threat_client(
-    mmdb_url: String,
+    api_base_url: String,
+    api_key: String,
+    mmdb_base_url: String,
+    versions_url: Option<String>,
     mmdb_path: Option<PathBuf>,
 ) -> Result<()> {
-    let client = Arc::new(ThreatClient::new(mmdb_url, mmdb_path));
+    let client = Arc::new(ThreatClient::new(api_base_url, api_key, mmdb_base_url, versions_url, mmdb_path));
 
     // Load immediately so errors show up at startup
     client.refresh_reader().await?;
@@ -410,10 +431,76 @@ fn parse_optional_datetime(raw: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-fn map_action_to_advice(action: Option<&str>) -> String {
-    match action.map(|a| a.to_lowercase()) {
-        Some(a) if a == "block" => "block".to_string(),
-        Some(a) if a == "captcha" || a == "challenge" => "challenge".to_string(),
-        _ => "allow".to_string(),
+fn build_no_data_response(ip: &str, ip_addr: IpAddr, geo: GeoInfo, asn: u32, org: String) -> ThreatResponse {
+    ThreatResponse {
+        schema_version: "1.0".to_string(),
+        tenant_id: "geoip".to_string(),
+        ip: ip.to_string(),
+        intel: ThreatIntel {
+            score: 0,
+            confidence: 0.0,
+            score_version: "geoip".to_string(),
+            categories: vec![],
+            tags: vec![],
+            first_seen: None,
+            last_seen: None,
+            source_count: 0,
+            reason_code: "NO_DATA".to_string(),
+            reason_summary: "No threat data available".to_string(),
+            rule_id: "none".to_string(),
+        },
+        context: ThreatContext {
+            asn,
+            org,
+            ip_version: if ip_addr.is_ipv4() { 4 } else { 6 },
+            geo,
+        },
+        advice: "allow".to_string(),
+        ttl_s: 300,
+        generated_at: Utc::now(),
     }
+}
+
+fn compute_target_path(base: Option<PathBuf>, latest: Option<&str>) -> Option<PathBuf> {
+    match (base, latest) {
+        (Some(p), Some(fname)) => {
+            if p.extension().is_some() {
+                Some(p)
+            } else {
+                Some(p.join(fname))
+            }
+        }
+        (Some(p), None) => Some(p),
+        (None, Some(fname)) => Some(PathBuf::from(fname)),
+        (None, None) => None,
+    }
+}
+
+fn parse_latest_version(text: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("latest=") {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+async fn download_mmdb(url: &str) -> Result<Vec<u8>> {
+    let client = get_global_reqwest_client()
+        .context("Failed to get HTTP client for MMDB download")?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to download MMDB from {}", url))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "MMDB download failed: status {} from {}",
+            status,
+            url
+        ));
+    }
+    let bytes = resp.bytes().await.context("Failed to read MMDB body")?;
+    Ok(bytes.to_vec())
 }

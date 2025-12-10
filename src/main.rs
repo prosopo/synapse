@@ -533,7 +533,14 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
         // Initialize threat intelligence client
         if !config.arxignis.threat_mmdb_url.is_empty() {
             if let Err(e) = threat::init_threat_client(
+                config.arxignis.base_url.clone(),
+                config.arxignis.api_key.clone(),
                 config.arxignis.threat_mmdb_url.clone(),
+                if config.arxignis.threat_mmdb_versions_url.is_empty() {
+                    None
+                } else {
+                    Some(config.arxignis.threat_mmdb_versions_url.clone())
+                },
                 config.arxignis.threat_mmdb_path.clone(),
             ).await {
                 log::warn!("Failed to initialize threat client: {}", e);
