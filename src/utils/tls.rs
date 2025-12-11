@@ -232,13 +232,19 @@ impl Certificates {
     }
 
     /// Set upstreams certificate mappings (hostname -> certificate_name)
+    /// The certificate_name should match the file stem used in cert_name_map
+    /// (i.e., normalized and sanitized: remove wildcard prefix, replace . with _)
     pub fn set_upstreams_cert_map(&self, mappings: DashMap<String, String>) {
         self.upstreams_cert_map.clear();
         for entry in mappings.iter() {
             let hostname = entry.key().clone();
             let cert_name = entry.value().clone();
-            self.upstreams_cert_map.insert(hostname.clone(), cert_name.clone());
-            log::info!("Mapped hostname '{}' to certificate '{}'", hostname, cert_name);
+            // Normalize certificate name to match file stem format used in cert_name_map
+            // Remove wildcard prefix if present, then sanitize (replace . with _)
+            let normalized_cert_name = cert_name.strip_prefix("*.").unwrap_or(&cert_name);
+            let sanitized_cert_name = normalized_cert_name.replace('.', "_").replace('*', "_");
+            self.upstreams_cert_map.insert(hostname.clone(), sanitized_cert_name.clone());
+            log::info!("Mapped hostname '{}' to certificate '{}' (normalized from '{}')", hostname, sanitized_cert_name, cert_name);
         }
         log::info!("Set upstreams certificate mappings: {} entries", self.upstreams_cert_map.len());
     }

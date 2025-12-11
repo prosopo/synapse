@@ -63,7 +63,6 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to install rustls crypto provider: {:?}", e))?;
 
     let args = Args::parse();
-
     // Handle clear certificate command (runs before loading full config)
     if let Some(certificate_name) = &args.clear_certificate {
         // Initialize minimal runtime for async operations
@@ -106,32 +105,6 @@ fn main() -> Result<()> {
             return Err(anyhow::anyhow!("--arxignis-api-key is required when no config file is provided"));
         }
     }
-
-    // Load configuration
-    let config = Config::load_from_args(&args)
-        .context("Failed to load configuration")?;
-
-    // Handle daemonization before starting tokio runtime
-    if config.daemon.enabled {
-        let stdout = File::create(&config.daemon.stdout)
-            .with_context(|| format!("Failed to create stdout file: {}", config.daemon.stdout))?;
-        let stderr = File::create(&config.daemon.stderr)
-            .with_context(|| format!("Failed to create stderr file: {}", config.daemon.stderr))?;
-
-        let mut daemonize = Daemonize::new()
-            .pid_file(&config.daemon.pid_file)
-            .chown_pid_file(config.daemon.chown_pid_file)
-            .working_directory(&config.daemon.working_directory)
-            .stdout(stdout)
-            .stderr(stderr);
-
-        if let Some(user) = &config.daemon.user {
-            daemonize = daemonize.user(user.as_str());
-        }
-
-        if let Some(group) = &config.daemon.group {
-            daemonize = daemonize.group(group.as_str());
-        }
 
         match daemonize.start() {
             Ok(_) => {
@@ -419,7 +392,6 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
     } else {
         log::info!("Embedded ACME server disabled (acme.enabled: false)");
     }
-
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Initialize Redis manager if Redis URL is provided
@@ -611,6 +583,63 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
 
         // Initialize captcha client if configuration is provided
         if let (Some(site_key), Some(secret_key), Some(jwt_secret)) = (
+            &config.arxignis.captcha.site_key,
+            &config.arxignis.captcha.secret_key,
+            &config.arxignis.captcha.jwt_secret
+        ) {
+            let captcha_config = CaptchaConfig {
+                site_key: site_key.clone(),
+                secret_key: secret_key.clone(),
+                jwt_secret: jwt_secret.clone(),
+                provider: CaptchaProvider::from_str(&config.arxignis.captcha.provider).unwrap_or(CaptchaProvider::HCaptcha),
+                token_ttl_seconds: config.arxignis.captcha.token_ttl,
+                validation_cache_ttl_seconds: config.arxignis.captcha.cache_ttl,
+            };
+
+            if let Err(e) = init_captcha_client(
+                captcha_config,
+            ).await {
+                log::warn!("Failed to initialize captcha client: {}", e);
+            } else {
+                log::info!("Captcha client initialized with provider: {}", config.arxignis.captcha.provider);
+                // Start captcha cache cleanup task
+                start_cache_cleanup_task().await;
+            }
+        } else {
+            log::info!("Captcha client not initialized (missing site_key, secret_key, or jwt_secret)");
+        }
+    } else {
+        log::warn!("No API credentials provided, HTTP filter will not be initialized");
+    }
+
+    // Access rules were already initialized after XDP attachment above
+
+    // Register config worker to fetch and apply configuration periodically
+    if !config.arxignis.base_url.is_empty() && !config.arxignis.api_key.is_empty() {
+        let refresh_interval = 10; // 10 seconds config refresh interval
+        let worker_config = worker::WorkerConfig {
+            name: "config".to_string(),
+            interval_secs: refresh_interval,
+            enabled: true,
+        };
+
+        let config_worker = worker::config::ConfigWorker::new(
+            config.arxignis.base_url.clone(),
+            config.arxignis.api_key.clone(),
+            refresh_interval,
+            state.skels.clone(),
+        );
+
+        if let Err(e) = worker_manager.register_worker(worker_config, config_worker) {
+            log::error!("Failed to register config worker: {}", e);
+        } else {
+            if config.mode == "agent" {
+                log::info!("Registered config worker for agent mode (interval: {}s) - fetches access rules, WAF rules, and content scanning config", refresh_interval);
+            } else {
+                log::info!("Registered config worker (interval: {}s) - fetches access rules, WAF rules, and content scanning config", refresh_interval);
+            }
+        }
+    } else {
             &config.arxignis.captcha.site_key,
             &config.arxignis.captcha.secret_key,
             &config.arxignis.captcha.jwt_secret

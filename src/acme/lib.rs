@@ -78,8 +78,11 @@ async fn save_cert_to_proxy_path(
     fs::create_dir_all(cert_dir).await
         .with_context(|| format!("Failed to create proxy_certificates directory: {}", proxy_certificates_path))?;
 
+    // Normalize domain name (remove wildcard prefix if present) before sanitizing
+    // This ensures the filename matches what the certificate worker expects
+    let normalized_domain = domain.strip_prefix("*.").unwrap_or(domain);
     // Sanitize domain name for filename (replace . with _ and * with _)
-    let sanitized_domain = domain.replace('.', "_").replace('*', "_");
+    let sanitized_domain = normalized_domain.replace('.', "_").replace('*', "_");
     let cert_path = cert_dir.join(format!("{}.crt", sanitized_domain));
     let key_path = cert_dir.join(format!("{}.key", sanitized_domain));
 

@@ -569,6 +569,10 @@ pub struct Args {
     #[arg(long, short = 'c')]
     pub config: Option<PathBuf>,
 
+    /// Clear a specific certificate from local filesystem and Redis
+    #[arg(long)]
+    pub clear_certificate: Option<String>,
+
      /// Redis connection URL for ACME cache storage.
     #[arg(long, default_value = "redis://127.0.0.1/0")]
     pub redis_url: String,
