@@ -13,7 +13,7 @@ use crate::worker::Worker;
 pub struct ThreatMmdbWorker {
     interval_secs: u64,
     mmdb_base_url: String,
-    versions_url: Option<String>,
+    versions_url: String,
     mmdb_path: Option<PathBuf>,
 }
 
@@ -21,7 +21,7 @@ impl ThreatMmdbWorker {
     pub fn new(
         interval_secs: u64,
         mmdb_base_url: String,
-        versions_url: Option<String>,
+        versions_url: String,
         mmdb_path: Option<PathBuf>,
     ) -> Self {
         Self {
@@ -116,19 +116,10 @@ impl Worker for ThreatMmdbWorker {
 /// to disk, and ask the threat module to reload it.
 async fn sync_mmdb(
     mmdb_base_url: &str,
-    versions_url: Option<String>,
+    versions_url: &str,
     mmdb_path: Option<PathBuf>,
     current_version: Option<String>,
 ) -> Result<Option<String>> {
-    // If no versions URL is configured, just reload from the existing local MMDB path.
-    let versions_url = match versions_url {
-        Some(v) if !v.is_empty() => v,
-        _ => {
-            crate::threat::refresh_threat_mmdb().await?;
-            return Ok(current_version);
-        }
-    };
-
     let versions_text = if versions_url.starts_with("http://") || versions_url.starts_with("https://") {
         let client = get_global_reqwest_client()
             .context("Failed to get HTTP client for versions download")?;
