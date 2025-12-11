@@ -14,6 +14,9 @@ export AX_NETWORK_DISABLE_XDP="false"
 # Gen0Sec configuration
 export AX_ARXIGNIS_API_KEY="your-api-key"
 export AX_ARXIGNIS_BASE_URL="https://api.gen0sec.com/v1"
+export AX_ARXIGNIS_THREAT_MMDB_URL="https://s3.amazonaws.com/your-bucket/indicators-latest.mmdb"
+export AX_ARXIGNIS_THREAT_MMDB_PATH="/var/cache/synapse/threat.mmdb"
+export AX_ARXIGNIS_THREAT_MMDB_REFRESH_SECS="0"
 
 # CAPTCHA configuration
 export AX_CAPTCHA_SITE_KEY="your-site-key"

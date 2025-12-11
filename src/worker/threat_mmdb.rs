@@ -57,7 +57,7 @@ impl Worker for ThreatMmdbWorker {
             // Initial sync on startup
             match sync_mmdb(
                 &mmdb_base_url,
-                versions_url.clone(),
+                &versions_url,
                 mmdb_path.clone(),
                 current_version.clone(),
             )
@@ -83,7 +83,7 @@ impl Worker for ThreatMmdbWorker {
                     _ = ticker.tick() => {
                         match sync_mmdb(
                             &mmdb_base_url,
-                            versions_url.clone(),
+                            &versions_url,
                             mmdb_path.clone(),
                             current_version.clone(),
                         ).await {
@@ -124,7 +124,7 @@ async fn sync_mmdb(
         let client = get_global_reqwest_client()
             .context("Failed to get HTTP client for versions download")?;
         let resp = client
-            .get(&versions_url)
+            .get(versions_url)
             .send()
             .await
             .with_context(|| format!("Failed to download versions file from {}", versions_url))?;
@@ -138,7 +138,7 @@ async fn sync_mmdb(
         }
         resp.text().await.context("Failed to read versions body")?
     } else {
-        tokio::fs::read_to_string(&versions_url)
+        tokio::fs::read_to_string(versions_url)
             .await
             .with_context(|| format!("Failed to read versions file from {}", versions_url))?
     };
