@@ -102,12 +102,8 @@ impl From<&ThreatResponse> for WafFields {
 pub struct ThreatClient {
     api_base_url: String,
     api_key: String,
-    mmdb_base_url: String,
-    versions_url: Option<String>,
     mmdb_path: Option<PathBuf>,
     reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
-    current_version: RwLock<Option<String>>,
-    current_path: RwLock<Option<PathBuf>>,
     pingora_cache: Arc<MemoryCache<String, ThreatResponse>>,
 }
 
@@ -115,19 +111,13 @@ impl ThreatClient {
     pub fn new(
         api_base_url: String,
         api_key: String,
-        mmdb_base_url: String,
-        versions_url: Option<String>,
         mmdb_path: Option<PathBuf>,
     ) -> Self {
         Self {
             api_base_url,
             api_key,
-            mmdb_base_url,
-            versions_url,
             mmdb_path,
             reader: RwLock::new(None),
-            current_version: RwLock::new(None),
-            current_path: RwLock::new(None),
             pingora_cache: Arc::new(MemoryCache::new(10_000)),
         }
     }
@@ -212,22 +202,16 @@ impl ThreatClient {
         Ok(Some(threat_data))
     }
 
-    /// Download (or read) the MMDB and keep it in memory
+    /// Read the MMDB from the configured local path and keep it in memory
     async fn refresh_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
-        let (version_opt, data, target_path) = self.fetch_mmdb_bytes().await?;
+        let path = self
+            .mmdb_path
+            .clone()
+            .ok_or_else(|| anyhow!("MMDB path not configured"))?;
 
-        if let Some(path) = &target_path {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .with_context(|| format!("Failed to create MMDB directory {:?}", parent))?;
-            }
-
-            tokio::fs::write(path, &data)
-                .await
-                .with_context(|| format!("Failed to write MMDB to {:?}", path))?;
-            log::info!("Threat MMDB written to {:?}", path);
-        }
+        let data = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("Failed to read MMDB from {:?}", path))?;
 
         let reader = Reader::from_source(data)
             .context("Failed to parse MMDB data")?;
@@ -237,20 +221,7 @@ impl ThreatClient {
         let mut guard = self.reader.write().await;
         *guard = Some(arc.clone());
 
-        if let Some(ver) = version_opt {
-            let mut vguard = self.current_version.write().await;
-            *vguard = Some(ver);
-        }
-        if let Some(path) = target_path {
-            let mut pguard = self.current_path.write().await;
-            let old = pguard.replace(path.clone());
-            drop(pguard);
-            if let Some(old_path) = old {
-                if old_path != path {
-                    let _ = tokio::fs::remove_file(old_path).await;
-                }
-            }
-        }
+        log::info!("Threat MMDB loaded from {:?}", path);
 
         Ok(arc)
     }
@@ -317,58 +288,6 @@ impl ThreatClient {
         ))
     }
 
-    async fn fetch_mmdb_bytes(&self) -> Result<(Option<String>, Vec<u8>, Option<PathBuf>)> {
-        // If versions URL is provided, resolve latest first
-        if let Some(vurl) = &self.versions_url {
-            let client = get_global_reqwest_client()
-                .context("Failed to get HTTP client for versions download")?;
-            let resp = client
-                .get(vurl)
-                .send()
-                .await
-                .with_context(|| format!("Failed to download versions file from {}", vurl))?;
-            let status = resp.status();
-            if !status.is_success() {
-                return Err(anyhow::anyhow!(
-                    "Versions download failed: status {} from {}",
-                    status,
-                    vurl
-                ));
-            }
-            let text = resp.text().await.context("Failed to read versions body")?;
-            let latest = parse_latest_version(&text)
-                .ok_or_else(|| anyhow!("Failed to parse latest version from versions file"))?;
-            let base = self.mmdb_base_url.trim_end_matches('/');
-
-            if base.starts_with("http://") || base.starts_with("https://") {
-                let url = format!("{}/{}", base, latest);
-                let bytes = download_mmdb(&url).await?;
-                let target_path = compute_target_path(self.mmdb_path.clone(), Some(&latest));
-                return Ok((Some(latest), bytes, target_path));
-            } else {
-                let local_path = PathBuf::from(base).join(&latest);
-                let bytes = tokio::fs::read(&local_path)
-                    .await
-                    .with_context(|| format!("Failed to read MMDB from {:?}", local_path))?;
-                let target_path = compute_target_path(self.mmdb_path.clone(), Some(&latest));
-                return Ok((Some(latest), bytes, target_path));
-            }
-        }
-
-        // Fallback: single static URL/path
-        if self.mmdb_base_url.starts_with("http://") || self.mmdb_base_url.starts_with("https://") {
-            let bytes = download_mmdb(&self.mmdb_base_url).await?;
-            let target_path = compute_target_path(self.mmdb_path.clone(), None);
-            Ok((None, bytes, target_path))
-        } else {
-            let bytes = tokio::fs::read(&self.mmdb_base_url)
-                .await
-                .with_context(|| format!("Failed to read MMDB from {}", self.mmdb_base_url))?;
-            let target_path = compute_target_path(self.mmdb_path.clone(), None);
-            Ok((None, bytes, target_path))
-        }
-    }
-
     /// Set data in pingora-memory-cache with TTL from record
     async fn set_pingora_cache(&self, ip: &str, data: &ThreatResponse) {
         let ttl = Duration::from_secs(data.ttl_s);
@@ -383,14 +302,15 @@ static THREAT_CLIENT: OnceCell<Arc<ThreatClient>> = OnceCell::const_new();
 pub async fn init_threat_client(
     api_base_url: String,
     api_key: String,
-    mmdb_base_url: String,
-    versions_url: Option<String>,
     mmdb_path: Option<PathBuf>,
 ) -> Result<()> {
-    let client = Arc::new(ThreatClient::new(api_base_url, api_key, mmdb_base_url, versions_url, mmdb_path));
+    let client = Arc::new(ThreatClient::new(api_base_url, api_key, mmdb_path));
 
-    // Load immediately so errors show up at startup
-    client.refresh_reader().await?;
+    // Best-effort initial load from local MMDB path.
+    // If the file is not present yet, the worker can download it later.
+    if let Err(e) = client.refresh_reader().await {
+        log::warn!("Initial Threat MMDB load failed: {}", e);
+    }
 
     THREAT_CLIENT
         .set(client)
@@ -461,46 +381,3 @@ fn build_no_data_response(ip: &str, ip_addr: IpAddr, geo: GeoInfo, asn: u32, org
     }
 }
 
-fn compute_target_path(base: Option<PathBuf>, latest: Option<&str>) -> Option<PathBuf> {
-    match (base, latest) {
-        (Some(p), Some(fname)) => {
-            if p.extension().is_some() {
-                Some(p)
-            } else {
-                Some(p.join(fname))
-            }
-        }
-        (Some(p), None) => Some(p),
-        (None, Some(fname)) => Some(PathBuf::from(fname)),
-        (None, None) => None,
-    }
-}
-
-fn parse_latest_version(text: &str) -> Option<String> {
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("latest=") {
-            return Some(rest.trim().to_string());
-        }
-    }
-    None
-}
-
-async fn download_mmdb(url: &str) -> Result<Vec<u8>> {
-    let client = get_global_reqwest_client()
-        .context("Failed to get HTTP client for MMDB download")?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("Failed to download MMDB from {}", url))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "MMDB download failed: status {} from {}",
-            status,
-            url
-        ));
-    }
-    let bytes = resp.bytes().await.context("Failed to read MMDB body")?;
-    Ok(bytes.to_vec())
-}

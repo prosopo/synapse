@@ -530,37 +530,43 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             return Err(e);
         }
 
-        // Initialize threat intelligence client
+        // Initialize threat intelligence client (REST API + GeoIP MMDB fallback)
         if !config.arxignis.threat_mmdb_url.is_empty() {
             if let Err(e) = threat::init_threat_client(
                 config.arxignis.base_url.clone(),
                 config.arxignis.api_key.clone(),
-                config.arxignis.threat_mmdb_url.clone(),
-                if config.arxignis.threat_mmdb_versions_url.is_empty() {
-                    None
-                } else {
-                    Some(config.arxignis.threat_mmdb_versions_url.clone())
-                },
                 config.arxignis.threat_mmdb_path.clone(),
             ).await {
                 log::warn!("Failed to initialize threat client: {}", e);
             } else {
                 log::info!("Threat intelligence client initialized (MMDB)");
 
-                // Register MMDB refresh worker if interval > 0
-                if config.arxignis.threat_mmdb_refresh_secs > 0 {
+                // Register MMDB refresh worker if a versions URL is configured and interval > 0
+                if !config.arxignis.threat_mmdb_versions_url.is_empty()
+                    && config.arxignis.threat_mmdb_refresh_secs > 0
+                {
                     let refresh_interval = config.arxignis.threat_mmdb_refresh_secs;
                     let worker_config = worker::WorkerConfig {
                         name: "threat_mmdb".to_string(),
                         interval_secs: refresh_interval,
                         enabled: true,
                     };
-                    let worker = worker::threat_mmdb::ThreatMmdbWorker::new(refresh_interval);
+                    let worker = worker::threat_mmdb::ThreatMmdbWorker::new(
+                        refresh_interval,
+                        config.arxignis.threat_mmdb_url.clone(),
+                        Some(config.arxignis.threat_mmdb_versions_url.clone()),
+                        config.arxignis.threat_mmdb_path.clone(),
+                    );
                     if let Err(e) = worker_manager.register_worker(worker_config, worker) {
                         log::error!("Failed to register threat MMDB worker: {}", e);
                     } else {
-                        log::info!("Registered threat MMDB worker (interval: {}s)", refresh_interval);
+                        log::info!(
+                            "Registered threat MMDB worker (interval: {}s)",
+                            refresh_interval
+                        );
                     }
+                } else {
+                    log::info!("Threat MMDB worker not registered (missing versions URL or interval <= 0)");
                 }
             }
         } else {
