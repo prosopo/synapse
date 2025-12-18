@@ -583,8 +583,8 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                 log::info!("Threat intelligence client initialized");
 
                 // Register Threat MMDB refresh worker if configured
+                // Allow empty versions_url for direct MMDB download
                 if !config.arxignis.threat_mmdb_url.is_empty()
-                    && !config.arxignis.threat_mmdb_versions_url.is_empty()
                     && config.arxignis.threat_mmdb_refresh_secs > 0
                 {
                     let refresh_interval = config.arxignis.threat_mmdb_refresh_secs;

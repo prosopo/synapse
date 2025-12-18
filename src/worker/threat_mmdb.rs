@@ -120,6 +120,34 @@ async fn sync_mmdb(
     mmdb_path: Option<PathBuf>,
     current_version: Option<String>,
 ) -> Result<Option<String>> {
+    // If no versions_url, treat mmdb_base_url as direct file URL
+    if versions_url.is_empty() {
+        let local_path = mmdb_path.ok_or_else(|| anyhow!("MMDB path not configured"))?;
+        
+        let bytes = if mmdb_base_url.starts_with("http://") || mmdb_base_url.starts_with("https://") {
+            download_mmdb(mmdb_base_url).await?
+        } else {
+            let file_path = mmdb_base_url.strip_prefix("file://").unwrap_or(mmdb_base_url);
+            tokio::fs::read(file_path)
+                .await
+                .with_context(|| format!("Failed to read MMDB from {}", file_path))?
+        };
+
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("Failed to create MMDB directory {:?}", parent))?;
+        }
+
+        tokio::fs::write(&local_path, &bytes)
+            .await
+            .with_context(|| format!("Failed to write MMDB to {:?}", local_path))?;
+
+        log::info!("Threat MMDB written to {:?}", local_path);
+        crate::threat::refresh_threat_mmdb().await?;
+        return Ok(Some("direct".to_string()));
+    }
+
     let versions_text = if versions_url.starts_with("http://") || versions_url.starts_with("https://") {
         let client = get_global_reqwest_client()
             .context("Failed to get HTTP client for versions download")?;
