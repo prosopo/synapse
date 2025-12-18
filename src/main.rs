@@ -568,21 +568,23 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             return Err(e);
         }
 
-        // Initialize threat intelligence client (REST API + GeoIP MMDB fallback)
-        if !config.arxignis.threat_mmdb_url.is_empty() {
+        // Initialize threat intelligence client (Threat MMDB → GeoIP MMDB fallback)
+        if !config.arxignis.threat_mmdb_url.is_empty() || !config.arxignis.geoip_mmdb_url.is_empty() {
             if let Err(e) = threat::init_threat_client(
                 config.arxignis.base_url.clone(),
                 config.arxignis.api_key.clone(),
                 config.arxignis.threat_mmdb_path.clone(),
+                config.arxignis.geoip_mmdb_path.clone(),
             )
             .await
             {
                 log::warn!("Failed to initialize threat client: {}", e);
             } else {
-                log::info!("Threat intelligence client initialized (MMDB)");
+                log::info!("Threat intelligence client initialized");
 
-                // Register MMDB refresh worker if a versions URL is configured and interval > 0
-                if !config.arxignis.threat_mmdb_versions_url.is_empty()
+                // Register Threat MMDB refresh worker if configured
+                if !config.arxignis.threat_mmdb_url.is_empty()
+                    && !config.arxignis.threat_mmdb_versions_url.is_empty()
                     && config.arxignis.threat_mmdb_refresh_secs > 0
                 {
                     let refresh_interval = config.arxignis.threat_mmdb_refresh_secs;
@@ -601,18 +603,40 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                         log::error!("Failed to register threat MMDB worker: {}", e);
                     } else {
                         log::info!(
-                            "Registered threat MMDB worker (interval: {}s)",
+                            "Registered threat MMDB worker (interval: {}s, checks for threat intel updates)",
                             refresh_interval
                         );
                     }
-                } else {
-                    log::info!(
-                        "Threat MMDB worker not registered (missing versions URL or interval <= 0)"
+                }
+
+                // Register GeoIP MMDB refresh worker if configured
+                if !config.arxignis.geoip_mmdb_url.is_empty()
+                    && config.arxignis.geoip_mmdb_refresh_secs > 0
+                {
+                    let refresh_interval = config.arxignis.geoip_mmdb_refresh_secs;
+                    let worker_config = worker::WorkerConfig {
+                        name: "geoip_mmdb".to_string(),
+                        interval_secs: refresh_interval,
+                        enabled: true,
+                    };
+                    let worker = worker::geoip_mmdb::GeoipMmdbWorker::new(
+                        refresh_interval,
+                        config.arxignis.geoip_mmdb_url.clone(),
+                        config.arxignis.geoip_mmdb_versions_url.clone(),
+                        config.arxignis.geoip_mmdb_path.clone(),
                     );
+                    if let Err(e) = worker_manager.register_worker(worker_config, worker) {
+                        log::error!("Failed to register GeoIP MMDB worker: {}", e);
+                    } else {
+                        log::info!(
+                            "Registered GeoIP MMDB worker (interval: {}s, checks for GeoIP database updates)",
+                            refresh_interval
+                        );
+                    }
                 }
             }
         } else {
-            log::warn!("Threat intelligence MMDB URL not configured; threat lookups disabled");
+            log::warn!("Threat and GeoIP MMDB URLs not configured; threat lookups will use API only");
         }
 
         // Initialize captcha client if configuration is provided

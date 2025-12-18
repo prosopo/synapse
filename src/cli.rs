@@ -139,15 +139,27 @@ pub struct Gen0SecConfig {
     /// URL to the threat-intel MMDB file 
     #[serde(default)]
     pub threat_mmdb_url: String,
-    /// Optional local path to store/read the MMDB file instead of memory-only
+    /// Optional local path to store/read the threat MMDB file
     #[serde(default)]
     pub threat_mmdb_path: Option<PathBuf>,
-    /// Optional versions.txt URL to check for the latest MMDB version
+    /// Optional versions.txt URL to check for the latest threat MMDB version
     #[serde(default)]
     pub threat_mmdb_versions_url: String,
-    /// How often to refresh the MMDB from the remote URL (seconds). 0/None = only at startup.
+    /// How often to refresh the threat MMDB from the remote URL (seconds). Default: 300 (5 minutes)
     #[serde(default = "default_threat_mmdb_refresh_secs")]
     pub threat_mmdb_refresh_secs: u64,
+    /// URL to the GeoIP MMDB file
+    #[serde(default)]
+    pub geoip_mmdb_url: String,
+    /// Optional local path to store/read the GeoIP MMDB file
+    #[serde(default)]
+    pub geoip_mmdb_path: Option<PathBuf>,
+    /// Optional versions.txt URL to check for the latest GeoIP MMDB version
+    #[serde(default)]
+    pub geoip_mmdb_versions_url: String,
+    /// How often to refresh the GeoIP MMDB from the remote URL (seconds). Default: 28800 (8 hours)
+    #[serde(default = "default_geoip_mmdb_refresh_secs")]
+    pub geoip_mmdb_refresh_secs: u64,
     #[serde(default = "default_log_sending_enabled")]
     pub log_sending_enabled: bool,
     #[serde(default = "default_include_response_body")]
@@ -163,7 +175,11 @@ fn default_base_url() -> String {
 }
 
 fn default_threat_mmdb_refresh_secs() -> u64 {
-    28800
+    300 // 5 minutes
+}
+
+fn default_geoip_mmdb_refresh_secs() -> u64 {
+    28800 // 8 hours
 }
 
 fn default_log_sending_enabled() -> bool {
@@ -248,7 +264,11 @@ impl Config {
                 threat_mmdb_url: "".to_string(),
                 threat_mmdb_path: None,
                 threat_mmdb_versions_url: "".to_string(),
-                threat_mmdb_refresh_secs: 28800,
+                threat_mmdb_refresh_secs: 300,
+                geoip_mmdb_url: "".to_string(),
+                geoip_mmdb_path: None,
+                geoip_mmdb_versions_url: "".to_string(),
+                geoip_mmdb_refresh_secs: 28800,
                 log_sending_enabled: true,
                 include_response_body: true,
                 max_body_size: 1024 * 1024, // 1MB

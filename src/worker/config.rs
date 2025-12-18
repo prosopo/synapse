@@ -125,15 +125,21 @@ pub async fn fetch_config(
         .map_err(|e| anyhow::anyhow!("Failed to get global HTTP client: {}", e))?;
 
     let url = format!("{}/config", base_url);
+    
+    // DEBUG: Log API request details
+    log::info!("🔍 [CONFIG] Fetching config from API:");
+    log::info!("🔍 [CONFIG]   URL: {}", url);
+    log::info!("🔍 [CONFIG]   API Key: {}...", &api_key.chars().take(10).collect::<String>());
 
     let response = client
-        .get(url)
+        .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Accept-Encoding", "gzip")
         .send()
         .await?;
 
     let status = response.status();
+    log::info!("🔍 [CONFIG] API Response Status: {}", status);
     match status {
         StatusCode::OK => {
             // Check if response is gzipped by looking at Content-Encoding header first
@@ -192,6 +198,31 @@ pub async fn fetch_config(
                     };
                     format!("Failed to parse JSON response: {}. Response preview: {}", e, preview)
                 })?;
+            
+            // DEBUG: Log parsed config details
+            log::info!("🔍 [CONFIG] Parsed config successfully:");
+            log::info!("🔍 [CONFIG]   Access Rules - Allow IPs: {}, Allow Country rules: {}, Allow ASN rules: {}",
+                body.config.access_rules.allow.ips.len(),
+                body.config.access_rules.allow.country.len(),
+                body.config.access_rules.allow.asn.len()
+            );
+            log::info!("🔍 [CONFIG]   Access Rules - Block IPs: {}, Block Country rules: {}, Block ASN rules: {}",
+                body.config.access_rules.block.ips.len(),
+                body.config.access_rules.block.country.len(),
+                body.config.access_rules.block.asn.len()
+            );
+            if !body.config.access_rules.block.country.is_empty() {
+                for rule in &body.config.access_rules.block.country {
+                    for (country, ip_list) in rule {
+                        log::info!("🔍 [CONFIG]   Blocked Country: {} ({} IP ranges)", country, ip_list.len());
+                    }
+                }
+            }
+            log::info!("🔍 [CONFIG]   WAF Rules: {}", body.config.waf_rules.rules.len());
+            for rule in &body.config.waf_rules.rules {
+                log::info!("🔍 [CONFIG]     WAF Rule: {} - {} (action: {})", rule.id, rule.name, rule.action);
+            }
+            
             // Update global config snapshot
             set_global_config(body.config.clone());
             Ok(body)
