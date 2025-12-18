@@ -138,9 +138,11 @@ async fn sync_mmdb(
         }
         resp.text().await.context("Failed to read versions body")?
     } else {
-        tokio::fs::read_to_string(versions_url)
+        // Strip file:// prefix if present
+        let file_path = versions_url.strip_prefix("file://").unwrap_or(versions_url);
+        tokio::fs::read_to_string(file_path)
             .await
-            .with_context(|| format!("Failed to read versions file from {}", versions_url))?
+            .with_context(|| format!("Failed to read versions file from {}", file_path))?
     };
 
     let latest = parse_latest_version(&versions_text)
@@ -160,7 +162,9 @@ async fn sync_mmdb(
         let url = format!("{}/{}", base, latest);
         download_mmdb(&url).await?
     } else {
-        let src_path = PathBuf::from(base).join(&latest);
+        // Strip file:// prefix if present
+        let file_base = base.strip_prefix("file://").unwrap_or(base);
+        let src_path = PathBuf::from(file_base).join(&latest);
         tokio::fs::read(&src_path)
             .await
             .with_context(|| format!("Failed to read MMDB from {:?}", src_path))?

@@ -156,13 +156,15 @@ impl ThreatClient {
         };
 
         // Check Threat MMDB first (if configured)
-        if self.threat_mmdb_path.is_some() {
-            // Threat MMDB is configured but may not contain this IP
-            log::debug!("Threat MMDB configured, but no threat data for {}", ip);
+        log::info!("🔍 [Threat] Checking Threat MMDB for {}", ip);
+        if let Some(threat_data) = self.lookup_threat_mmdb(ip, ip_addr).await? {
+            log::info!("🔍 [Threat] Found threat data in Threat MMDB for {}: score={}", ip, threat_data.intel.score);
+            self.set_pingora_cache(ip, &threat_data).await;
+            return Ok(Some(threat_data));
         }
 
         // REST API disabled - skip directly to GeoIP fallback
-        log::debug!("No threat data found for {}, using GeoIP fallback", ip);
+        log::info!("🔍 [Threat] No threat data found for {} in Threat MMDB, using GeoIP fallback", ip);
 
         // GeoIP fallback
         let (geo, asn, org) = self.lookup_geo(ip_addr).await?;
@@ -262,6 +264,18 @@ impl ThreatClient {
         Ok(arc)
     }
 
+    async fn ensure_threat_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        {
+            let guard = self.threat_reader.read().await;
+            if let Some(existing) = guard.as_ref() {
+                return Ok(existing.clone());
+            }
+        }
+
+        // No reader loaded yet – fetch it now
+        self.refresh_threat_reader().await
+    }
+
     async fn ensure_geoip_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
         {
             let guard = self.geoip_reader.read().await;
@@ -272,6 +286,57 @@ impl ThreatClient {
 
         // No reader loaded yet – fetch it now
         self.refresh_geoip_reader().await
+    }
+
+    /// Look up threat intelligence from the Threat MMDB
+    async fn lookup_threat_mmdb(&self, ip: &str, ip_addr: IpAddr) -> Result<Option<ThreatResponse>> {
+        log::info!("🔍 [Threat MMDB] Starting lookup for {}", ip);
+        
+        // Check if threat reader is available
+        let reader_opt = {
+            let guard = self.threat_reader.read().await;
+            guard.clone()
+        };
+
+        let reader = match reader_opt {
+            Some(r) => {
+                log::info!("🔍 [Threat MMDB] Reader available, performing lookup");
+                r
+            }
+            None => {
+                log::warn!("🔍 [Threat MMDB] Reader not loaded, skipping threat lookup for {}", ip);
+                return Ok(None);
+            }
+        };
+
+        // Perform blocking MMDB lookup in a separate thread
+        let result = tokio::task::spawn_blocking({
+            let reader = reader.clone();
+            let ip_addr_clone = ip_addr;
+            move || -> Result<ThreatResponse, maxminddb::MaxMindDBError> {
+                reader.lookup(ip_addr_clone)
+            }
+        })
+        .await;
+
+        match result {
+            Ok(Ok(threat_data)) => {
+                log::info!("🔍 [Threat MMDB] Found data for {}: {:?}", ip, threat_data);
+                Ok(Some(threat_data))
+            }
+            Ok(Err(maxminddb::MaxMindDBError::AddressNotFoundError(_))) => {
+                log::debug!("🔍 [Threat MMDB] IP {} not found in database", ip);
+                Ok(None)
+            }
+            Ok(Err(e)) => {
+                log::warn!("🔍 [Threat MMDB] Lookup error for {}: {}", ip, e);
+                Ok(None)
+            }
+            Err(e) => {
+                log::warn!("🔍 [Threat MMDB] Task error for {}: {}", ip, e);
+                Ok(None)
+            }
+        }
     }
 
     async fn lookup_geo(&self, ip: IpAddr) -> Result<(GeoInfo, u32, String)> {

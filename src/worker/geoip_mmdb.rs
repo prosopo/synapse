@@ -227,3 +227,4 @@ async fn download_mmdb(url: &str) -> Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
+
