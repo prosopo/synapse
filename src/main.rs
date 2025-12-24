@@ -569,12 +569,19 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
         }
 
         // Initialize threat intelligence client (Threat MMDB → GeoIP MMDB fallback)
-        if !config.arxignis.threat_mmdb_url.is_empty() || !config.arxignis.geoip_mmdb_url.is_empty() {
+        let has_geoip = !config.geoip.country.url.is_empty()
+            || !config.geoip.asn.url.is_empty()
+            || !config.geoip.city.url.is_empty()
+            || config.geoip.country.path.is_some()
+            || config.geoip.asn.path.is_some()
+            || config.geoip.city.path.is_some();
+
+        if !config.arxignis.threat_mmdb_url.is_empty() || has_geoip {
             if let Err(e) = threat::init_threat_client(
-                config.arxignis.base_url.clone(),
-                config.arxignis.api_key.clone(),
                 config.arxignis.threat_mmdb_path.clone(),
-                config.arxignis.geoip_mmdb_path.clone(),
+                config.geoip.country.path.clone(),
+                config.geoip.asn.path.clone(),
+                config.geoip.city.path.clone(),
             )
             .await
             {
@@ -596,8 +603,9 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                     let worker = worker::threat_mmdb::ThreatMmdbWorker::new(
                         refresh_interval,
                         config.arxignis.threat_mmdb_url.clone(),
-                        config.arxignis.threat_mmdb_versions_url.clone(),
                         config.arxignis.threat_mmdb_path.clone(),
+                        config.arxignis.threat_mmdb_headers.clone(),
+                        config.arxignis.api_key.clone(),
                     );
                     if let Err(e) = worker_manager.register_worker(worker_config, worker) {
                         log::error!("Failed to register threat MMDB worker: {}", e);
@@ -609,29 +617,72 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                     }
                 }
 
-                // Register GeoIP MMDB refresh worker if configured
-                if !config.arxignis.geoip_mmdb_url.is_empty()
-                    && config.arxignis.geoip_mmdb_refresh_secs > 0
-                {
-                    let refresh_interval = config.arxignis.geoip_mmdb_refresh_secs;
+                // Register GeoIP MMDB refresh workers if configured
+                let refresh_interval = config.geoip.refresh_secs;
+
+                // Country database worker
+                if !config.geoip.country.url.is_empty() && refresh_interval > 0 {
                     let worker_config = worker::WorkerConfig {
-                        name: "geoip_mmdb".to_string(),
+                        name: "geoip_country_mmdb".to_string(),
                         interval_secs: refresh_interval,
                         enabled: true,
                     };
                     let worker = worker::geoip_mmdb::GeoipMmdbWorker::new(
                         refresh_interval,
-                        config.arxignis.geoip_mmdb_url.clone(),
-                        config.arxignis.geoip_mmdb_versions_url.clone(),
-                        config.arxignis.geoip_mmdb_path.clone(),
+                        config.geoip.country.url.clone(),
+                        "".to_string(), // versions_url not used for geoip
+                        config.geoip.country.path.clone(),
+                        config.geoip.country.headers.clone(),
+                        worker::geoip_mmdb::GeoipDatabaseType::Country,
                     );
                     if let Err(e) = worker_manager.register_worker(worker_config, worker) {
-                        log::error!("Failed to register GeoIP MMDB worker: {}", e);
+                        log::error!("Failed to register GeoIP Country MMDB worker: {}", e);
                     } else {
-                        log::info!(
-                            "Registered GeoIP MMDB worker (interval: {}s, checks for GeoIP database updates)",
-                            refresh_interval
-                        );
+                        log::info!("Registered GeoIP Country MMDB worker (interval: {}s)", refresh_interval);
+                    }
+                }
+
+                // ASN database worker
+                if !config.geoip.asn.url.is_empty() && refresh_interval > 0 {
+                    let worker_config = worker::WorkerConfig {
+                        name: "geoip_asn_mmdb".to_string(),
+                        interval_secs: refresh_interval,
+                        enabled: true,
+                    };
+                    let worker = worker::geoip_mmdb::GeoipMmdbWorker::new(
+                        refresh_interval,
+                        config.geoip.asn.url.clone(),
+                        "".to_string(),
+                        config.geoip.asn.path.clone(),
+                        config.geoip.asn.headers.clone(),
+                        worker::geoip_mmdb::GeoipDatabaseType::Asn,
+                    );
+                    if let Err(e) = worker_manager.register_worker(worker_config, worker) {
+                        log::error!("Failed to register GeoIP ASN MMDB worker: {}", e);
+                    } else {
+                        log::info!("Registered GeoIP ASN MMDB worker (interval: {}s)", refresh_interval);
+                    }
+                }
+
+                // City database worker
+                if !config.geoip.city.url.is_empty() && refresh_interval > 0 {
+                    let worker_config = worker::WorkerConfig {
+                        name: "geoip_city_mmdb".to_string(),
+                        interval_secs: refresh_interval,
+                        enabled: true,
+                    };
+                    let worker = worker::geoip_mmdb::GeoipMmdbWorker::new(
+                        refresh_interval,
+                        config.geoip.city.url.clone(),
+                        "".to_string(),
+                        config.geoip.city.path.clone(),
+                        config.geoip.city.headers.clone(),
+                        worker::geoip_mmdb::GeoipDatabaseType::City,
+                    );
+                    if let Err(e) = worker_manager.register_worker(worker_config, worker) {
+                        log::error!("Failed to register GeoIP City MMDB worker: {}", e);
+                    } else {
+                        log::info!("Registered GeoIP City MMDB worker (interval: {}s)", refresh_interval);
                     }
                 }
             }
@@ -711,6 +762,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
         let bpf_stats_config = config.bpf_stats.clone();
         let logging_config = config.logging.clone();
         let arxignis_config = config.arxignis.clone();
+        let geoip_config = config.geoip.clone();
         let network_config = config.network.clone();
         let tcp_fingerprint_config = config.tcp_fingerprint.clone();
         let pingora_config = config.pingora.clone();
@@ -720,6 +772,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                 redis: Default::default(),
                 network: network_config,
                 arxignis: arxignis_config,
+                geoip: geoip_config,
                 content_scanning: Default::default(),
                 logging: logging_config,
                 bpf_stats: bpf_stats_config,

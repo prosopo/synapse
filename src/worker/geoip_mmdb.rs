@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
@@ -8,11 +9,19 @@ use tokio::time::{interval, Duration, MissedTickBehavior};
 use crate::http_client::get_global_reqwest_client;
 use crate::worker::Worker;
 
+pub enum GeoipDatabaseType {
+    Country,
+    Asn,
+    City,
+}
+
 pub struct GeoipMmdbWorker {
     interval_secs: u64,
     mmdb_base_url: String,
     versions_url: String,
     mmdb_path: Option<PathBuf>,
+    headers: Option<HashMap<String, String>>,
+    db_type: GeoipDatabaseType,
 }
 
 impl GeoipMmdbWorker {
@@ -21,19 +30,27 @@ impl GeoipMmdbWorker {
         mmdb_base_url: String,
         versions_url: String,
         mmdb_path: Option<PathBuf>,
+        headers: Option<HashMap<String, String>>,
+        db_type: GeoipDatabaseType,
     ) -> Self {
         Self {
             interval_secs,
             mmdb_base_url,
             versions_url,
             mmdb_path,
+            headers,
+            db_type,
         }
     }
 }
 
 impl Worker for GeoipMmdbWorker {
     fn name(&self) -> &str {
-        "geoip_mmdb"
+        match self.db_type {
+            GeoipDatabaseType::Country => "geoip_country_mmdb",
+            GeoipDatabaseType::Asn => "geoip_asn_mmdb",
+            GeoipDatabaseType::City => "geoip_city_mmdb",
+        }
     }
 
     fn run(&self, mut shutdown: watch::Receiver<bool>) -> JoinHandle<()> {
@@ -41,9 +58,15 @@ impl Worker for GeoipMmdbWorker {
         let mmdb_base_url = self.mmdb_base_url.clone();
         let versions_url = self.versions_url.clone();
         let mmdb_path = self.mmdb_path.clone();
+        let headers = self.headers.clone();
+        let db_type = match self.db_type {
+            GeoipDatabaseType::Country => "country",
+            GeoipDatabaseType::Asn => "asn",
+            GeoipDatabaseType::City => "city",
+        };
 
         tokio::spawn(async move {
-            let worker_name = "geoip_mmdb".to_string();
+            let worker_name = format!("geoip_{}_mmdb", db_type);
             let mut current_version: Option<String> = None;
 
             log::info!(
@@ -57,14 +80,37 @@ impl Worker for GeoipMmdbWorker {
                 &versions_url,
                 mmdb_path.clone(),
                 current_version.clone(),
+                headers.clone(),
             )
             .await
             {
                 Ok(new_ver) => {
+                    // Only refresh if the file was actually updated (not "existing")
+                    if new_ver.as_ref().map(|v| v != "existing").unwrap_or(true) {
                     current_version = new_ver;
+                    }
+                    // Always refresh the database reader to ensure it's loaded
+                    match db_type {
+                        "country" => {
+                            if let Err(e) = crate::threat::refresh_geoip_country_mmdb().await {
+                                log::warn!("[{}] Failed to refresh GeoIP Country MMDB: {}", worker_name, e);
+                            }
+                        }
+                        "asn" => {
+                            if let Err(e) = crate::threat::refresh_geoip_asn_mmdb().await {
+                                log::warn!("[{}] Failed to refresh GeoIP ASN MMDB: {}", worker_name, e);
+                            }
+                        }
+                        "city" => {
+                            if let Err(e) = crate::threat::refresh_geoip_city_mmdb().await {
+                                log::warn!("[{}] Failed to refresh GeoIP City MMDB: {}", worker_name, e);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 Err(e) => {
-                    log::warn!("[{}] Initial GeoIP MMDB sync failed: {}", worker_name, e);
+                    log::warn!("[{}] Initial GeoIP {} MMDB sync failed: {}", worker_name, db_type, e);
                 }
             }
 
@@ -79,13 +125,33 @@ impl Worker for GeoipMmdbWorker {
                             &versions_url,
                             mmdb_path.clone(),
                             current_version.clone(),
+                            headers.clone(),
                         ).await {
                             Ok(new_ver) => {
                                 if new_ver != current_version {
                                     current_version = new_ver;
-                                    log::info!("[{}] GeoIP MMDB updated to latest version", worker_name);
+                                    log::info!("[{}] GeoIP {} MMDB updated to latest version", worker_name, db_type);
+                                    // Refresh only the specific database that was updated
+                                    match db_type {
+                                        "country" => {
+                                            if let Err(e) = crate::threat::refresh_geoip_country_mmdb().await {
+                                                log::warn!("[{}] Failed to refresh GeoIP Country MMDB: {}", worker_name, e);
+                                            }
+                                        }
+                                        "asn" => {
+                                            if let Err(e) = crate::threat::refresh_geoip_asn_mmdb().await {
+                                                log::warn!("[{}] Failed to refresh GeoIP ASN MMDB: {}", worker_name, e);
+                                            }
+                                        }
+                                        "city" => {
+                                            if let Err(e) = crate::threat::refresh_geoip_city_mmdb().await {
+                                                log::warn!("[{}] Failed to refresh GeoIP City MMDB: {}", worker_name, e);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
                                 } else {
-                                    log::debug!("[{}] GeoIP MMDB already at latest version", worker_name);
+                                    log::debug!("[{}] GeoIP {} MMDB already at latest version", worker_name, db_type);
                                 }
                             }
                             Err(e) => {
@@ -110,14 +176,22 @@ async fn sync_mmdb(
     versions_url: &str,
     mmdb_path: Option<PathBuf>,
     current_version: Option<String>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<Option<String>> {
     let local_path = mmdb_path.ok_or_else(|| anyhow!("MMDB path not configured for GeoIP MMDB worker"))?;
 
     if versions_url.is_empty() {
+        // Check if file already exists - if it does, skip download to avoid redundant writes
+        // This prevents multiple workers from downloading the same file simultaneously
+        if local_path.exists() {
+            log::debug!("GeoIP MMDB file already exists at {:?}, skipping download", local_path);
+            return Ok(Some("existing".to_string()));
+        }
+
         log::debug!("No versions URL provided, downloading directly from {}", mmdb_base_url);
-        
+
         let bytes = if mmdb_base_url.starts_with("http://") || mmdb_base_url.starts_with("https://") {
-            download_mmdb(mmdb_base_url).await?
+            download_mmdb(mmdb_base_url, headers.as_ref()).await?
         } else {
             let src_path = PathBuf::from(mmdb_base_url);
             tokio::fs::read(&src_path)
@@ -136,15 +210,19 @@ async fn sync_mmdb(
             .with_context(|| format!("Failed to write MMDB to {:?}", local_path))?;
 
         log::info!("GeoIP MMDB written to {:?}", local_path);
-        crate::threat::refresh_geoip_mmdb().await?;
         return Ok(Some("direct".to_string()));
     }
 
     let versions_text = if versions_url.starts_with("http://") || versions_url.starts_with("https://") {
         let client = get_global_reqwest_client()
             .context("Failed to get HTTP client for versions download")?;
-        let resp = client
-            .get(versions_url)
+        let mut req = client.get(versions_url);
+        if let Some(ref hdrs) = headers {
+            for (key, value) in hdrs {
+                req = req.header(key, value);
+            }
+        }
+        let resp = req
             .send()
             .await
             .with_context(|| format!("Failed to download versions file from {}", versions_url))?;
@@ -168,6 +246,7 @@ async fn sync_mmdb(
 
     if let Some(ref curr) = current_version {
         if curr == &latest {
+            log::debug!("GeoIP MMDB already at latest version: {}", latest);
             return Ok(current_version);
         }
     }
@@ -175,7 +254,7 @@ async fn sync_mmdb(
     let base = mmdb_base_url.trim_end_matches('/');
     let bytes = if base.starts_with("http://") || base.starts_with("https://") {
         let url = format!("{}/{}", base, latest);
-        download_mmdb(&url).await?
+        download_mmdb(&url, headers.as_ref()).await?
     } else {
         let src_path = PathBuf::from(base).join(&latest);
         tokio::fs::read(&src_path)
@@ -207,11 +286,16 @@ fn parse_latest_version(text: &str) -> Option<String> {
     None
 }
 
-async fn download_mmdb(url: &str) -> Result<Vec<u8>> {
+async fn download_mmdb(url: &str, headers: Option<&HashMap<String, String>>) -> Result<Vec<u8>> {
     let client = get_global_reqwest_client()
         .context("Failed to get HTTP client for MMDB download")?;
-    let resp = client
-        .get(url)
+    let mut req = client.get(url);
+    if let Some(hdrs) = headers {
+        for (key, value) in hdrs {
+            req = req.header(key, value);
+        }
+    }
+    let resp = req
         .send()
         .await
         .with_context(|| format!("Failed to download MMDB from {}", url))?;

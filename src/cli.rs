@@ -38,6 +38,8 @@ pub struct Config {
     #[serde(default)]
     pub arxignis: Gen0SecConfig,
     #[serde(default)]
+    pub geoip: GeoipConfig,
+    #[serde(default)]
     pub content_scanning: ContentScanningCliConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -136,30 +138,18 @@ pub struct Gen0SecConfig {
     pub api_key: String,
     #[serde(default = "default_base_url")]
     pub base_url: String,
-    /// URL to the threat-intel MMDB file 
+    /// Base URL for threat-intel MMDB files (version.txt and MMDB files are at this base URL)
     #[serde(default)]
     pub threat_mmdb_url: String,
     /// Optional local path to store/read the threat MMDB file
     #[serde(default)]
     pub threat_mmdb_path: Option<PathBuf>,
-    /// Optional versions.txt URL to check for the latest threat MMDB version
-    #[serde(default)]
-    pub threat_mmdb_versions_url: String,
     /// How often to refresh the threat MMDB from the remote URL (seconds). Default: 300 (5 minutes)
     #[serde(default = "default_threat_mmdb_refresh_secs")]
     pub threat_mmdb_refresh_secs: u64,
-    /// URL to the GeoIP MMDB file
+    /// Optional custom headers to add to Threat MMDB download requests
     #[serde(default)]
-    pub geoip_mmdb_url: String,
-    /// Optional local path to store/read the GeoIP MMDB file
-    #[serde(default)]
-    pub geoip_mmdb_path: Option<PathBuf>,
-    /// Optional versions.txt URL to check for the latest GeoIP MMDB version
-    #[serde(default)]
-    pub geoip_mmdb_versions_url: String,
-    /// How often to refresh the GeoIP MMDB from the remote URL (seconds). Default: 28800 (8 hours)
-    #[serde(default = "default_geoip_mmdb_refresh_secs")]
-    pub geoip_mmdb_refresh_secs: u64,
+    pub threat_mmdb_headers: Option<std::collections::HashMap<String, String>>,
     #[serde(default = "default_log_sending_enabled")]
     pub log_sending_enabled: bool,
     #[serde(default = "default_include_response_body")]
@@ -178,9 +168,6 @@ fn default_threat_mmdb_refresh_secs() -> u64 {
     300 // 5 minutes
 }
 
-fn default_geoip_mmdb_refresh_secs() -> u64 {
-    28800 // 8 hours
-}
 
 fn default_log_sending_enabled() -> bool {
     true
@@ -192,6 +179,39 @@ fn default_include_response_body() -> bool {
 
 fn default_max_body_size() -> usize {
     1024 * 1024 // 1MB
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeoipDatabaseConfig {
+    /// URL to download GeoIP MMDB file
+    #[serde(default)]
+    pub url: String,
+    /// Optional local path to store/read the GeoIP MMDB file
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Optional custom headers to add to download requests
+    #[serde(default)]
+    pub headers: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeoipConfig {
+    /// Country database configuration
+    #[serde(default)]
+    pub country: GeoipDatabaseConfig,
+    /// ASN database configuration
+    #[serde(default)]
+    pub asn: GeoipDatabaseConfig,
+    /// City database configuration
+    #[serde(default)]
+    pub city: GeoipDatabaseConfig,
+    /// How often to refresh the GeoIP MMDB from the remote URL (seconds). Default: 28800 (8 hours)
+    #[serde(default = "default_geoip_refresh_secs")]
+    pub refresh_secs: u64,
+}
+
+fn default_geoip_refresh_secs() -> u64 {
+    28800 // 8 hours
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -263,12 +283,8 @@ impl Config {
                 base_url: "https://api.gen0sec.com/v1".to_string(),
                 threat_mmdb_url: "".to_string(),
                 threat_mmdb_path: None,
-                threat_mmdb_versions_url: "".to_string(),
                 threat_mmdb_refresh_secs: 300,
-                geoip_mmdb_url: "".to_string(),
-                geoip_mmdb_path: None,
-                geoip_mmdb_versions_url: "".to_string(),
-                geoip_mmdb_refresh_secs: 28800,
+                threat_mmdb_headers: None,
                 log_sending_enabled: true,
                 include_response_body: true,
                 max_body_size: 1024 * 1024, // 1MB
@@ -280,6 +296,24 @@ impl Config {
                     token_ttl: 7200,
                     cache_ttl: 300,
                 },
+            },
+            geoip: GeoipConfig {
+                country: GeoipDatabaseConfig {
+                    url: "".to_string(),
+                    path: None,
+                    headers: None,
+                },
+                asn: GeoipDatabaseConfig {
+                    url: "".to_string(),
+                    path: None,
+                    headers: None,
+                },
+                city: GeoipDatabaseConfig {
+                    url: "".to_string(),
+                    path: None,
+                    headers: None,
+                },
+                refresh_secs: 28800,
             },
             content_scanning: ContentScanningCliConfig {
                 enabled: false,

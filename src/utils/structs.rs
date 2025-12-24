@@ -177,18 +177,3 @@ pub struct InnerMap {
     pub disable_access_log: bool,
 }
 
-#[allow(dead_code)]
-impl InnerMap {
-    pub fn new() -> Self {
-        Self {
-            address: Default::default(),
-            port: Default::default(),
-            ssl_enabled: Default::default(),
-            http2_enabled: Default::default(),
-            https_proxy_enabled: Default::default(),
-            rate_limit: Default::default(),
-            healthcheck: Default::default(),
-            disable_access_log: Default::default(),
-        }
-    }
-}
