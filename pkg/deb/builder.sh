@@ -29,7 +29,10 @@ cd ${pkg_dir}
 # Ensure devscripts and equivs are installed (required for mk-build-deps)
 if ! command -v mk-build-deps &> /dev/null; then
     sudo apt-get update
-    sudo apt-get install -y devscripts equivs
+    sudo apt-get install -y curl devscripts equivs tar gcc gzip pkg-config git build-essential clang llvm \
+                    libelf-dev libssl-dev \
+                    zlib1g-dev libzstd-dev pkg-config libcap-dev \
+                    binutils-multiarch-dev cmake
 fi
 mk-build-deps -ir -t "apt-get -o Debug::pkgProblemResolver=yes -y"
 
