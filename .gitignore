@@ -37,3 +37,8 @@ upstreams.yaml
 docker/volumes/
 certs
 .tmp
+!config/config.yaml
+*.deb
+*.rpm
+null
+*.log

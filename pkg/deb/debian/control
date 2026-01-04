@@ -1,0 +1,17 @@
+Source: synapse
+Section: admin
+Priority: optional
+Maintainer: Gen0Sec <support@gen0sec.com>
+Build-Depends: debhelper (>=10)
+Standards-Version: 4.0.0
+Homepage: https://github.com/gen0sec/synapse
+
+Package: synapse
+Architecture: any
+Depends: ${shlibs:Depends}
+Description: High-performance reverse proxy and firewall
+ Synapse is a high-performance reverse proxy and firewall built with Rust,
+ featuring XDP-based packet filtering, dynamic access rules, threat intelligence
+ integration, and advanced routing capabilities. It provides ultra-low latency
+ protection at the kernel level and can operate in reverse proxy mode or
+ firewall-only mode.

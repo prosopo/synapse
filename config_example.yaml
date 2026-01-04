@@ -85,6 +85,21 @@ arxignis:
   # Maximum size for request/response bodies in access logs (bytes) - Don't override in Basic plan that's the maximum allowed by the plan.
   max_body_size: 1048576
 
+  # Threat MMDB Configuration
+  # Base URL for Threat MMDB files (version.txt and MMDB files are at this base URL)
+  # Example: https://example.com/threat/ (will use https://example.com/threat/version.txt)
+  threat_mmdb_url: ""
+
+  # Local path to Threat MMDB file (optional, for pre-downloaded files)
+  threat_mmdb_path: null
+
+  # Threat MMDB refresh interval in seconds (default: 300 = 5 minutes)
+  threat_mmdb_refresh_secs: 300
+
+  # Custom headers to add to Threat MMDB download requests (optional)
+  # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+  threat_mmdb_headers: null
+
   # Captcha Configuration
   captcha:
     # Captcha site key for security verification
@@ -104,6 +119,47 @@ arxignis:
 
     # Captcha validation cache TTL in seconds
     cache_ttl: 300
+
+# GeoIP MMDB Configuration
+geoip:
+  # Country database configuration
+  country:
+    # URL to download GeoIP Country MMDB file
+    url: ""
+    # Local path to GeoIP Country MMDB file (full path) or directory prefix
+    # Full path example: /var/cache/synapse/GeoLite2-Country.mmdb
+    # Directory prefix example: /var/cache/synapse (will use GeoLite2-Country.mmdb)
+    path: null
+    # Custom headers to add to download requests (optional)
+    # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+    headers: null
+
+  # ASN database configuration
+  asn:
+    # URL to download GeoIP ASN MMDB file
+    url: ""
+    # Local path to GeoIP ASN MMDB file (full path) or directory prefix
+    # Full path example: /var/cache/synapse/GeoLite2-ASN.mmdb
+    # Directory prefix example: /var/cache/synapse (will use GeoLite2-ASN.mmdb)
+    path: null
+    # Custom headers to add to download requests (optional)
+    # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+    headers: null
+
+  # City database configuration
+  city:
+    # URL to download GeoIP City MMDB file
+    url: ""
+    # Local path to GeoIP City MMDB file (full path) or directory prefix
+    # Full path example: /var/cache/synapse/GeoLite2-City.mmdb
+    # Directory prefix example: /var/cache/synapse (will use GeoLite2-City.mmdb)
+    path: null
+    # Custom headers to add to download requests (optional)
+    # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+    headers: null
+
+  # GeoIP MMDB refresh interval in seconds (default: 28800 = 8 hours)
+  refresh_secs: 28800
 
 # Content Scanning
 content_scanning:

@@ -1,0 +1,51 @@
+#!/usr/bin/make -f
+
+# Copyright (C) 2025, Gen0Sec.
+
+# Uncomment this to turn on verbose mode.
+export DH_VERBOSE=1
+
+# This has to be exported to make some magic below work.
+export DH_OPTIONS
+
+# Package build options
+export BUILD_DIR="../.."
+export TARGET_DIR="${CURDIR}/debian/synapse"
+export PKG_DIR="${TARGET_DIR}/usr"
+export CONFIG_DIR="${TARGET_DIR}/etc/synapse"
+export BIN_DIR="${PKG_DIR}/bin"
+export DOC_DIR="${PKG_DIR}/share/doc/synapse"
+export SYS_DIR="${TARGET_DIR}/lib/systemd/system"
+
+%:
+	dh $@ --with=systemd
+
+override_dh_clean:
+
+override_dh_install:
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+	${HOME}/.cargo/bin/rustup default stable && ${HOME}/.cargo/bin/rustup update stable
+
+	echo ${CURDIR}
+	${HOME}/.cargo/bin/cargo build --release
+
+	mkdir -p ${CONFIG_DIR}
+	mkdir -p ${BIN_DIR}
+	mkdir -p ${DOC_DIR}
+	mkdir -p ${SYS_DIR}
+
+	install -m 0750 ${BUILD_DIR}/target/release/synapse ${BIN_DIR}/
+	install -m 0640 ${BUILD_DIR}/config/config.yaml ${CONFIG_DIR}/
+	install -m 0640 ${BUILD_DIR}/pkg/deb/debian/copyright ${DOC_DIR}/
+	install -m 0644 ${BUILD_DIR}/pkg/synapse.service ${SYS_DIR}/
+	gzip -9 ${BUILD_DIR}/pkg/deb/debian/changelog -c -n > ${DOC_DIR}/changelog.Debian.gz
+
+override_dh_installdocs:
+
+override_dh_installchangelogs:
+
+override_dh_perl:
+
+override_dh_link:
+
+.PHONY: override_dh_clean override_dh_install override_dh_installdocs override_dh_installchangelogs override_dh_perl override_dh_link
