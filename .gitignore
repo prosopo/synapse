@@ -38,6 +38,9 @@ docker/volumes/
 certs
 .tmp
 !config/config.yaml
+!config/upstreams.yaml
+!config/upstreams_kubernetes.yaml
+!config/upstreams_consul.yaml
 *.deb
 *.rpm
 null

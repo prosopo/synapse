@@ -27,7 +27,7 @@ override_dh_install:
 	${HOME}/.cargo/bin/rustup default stable && ${HOME}/.cargo/bin/rustup update stable
 
 	echo ${CURDIR}
-	${HOME}/.cargo/bin/cargo build --release
+	cd ${BUILD_DIR} && ${HOME}/.cargo/bin/cargo build --release
 
 	mkdir -p ${CONFIG_DIR}
 	mkdir -p ${BIN_DIR}
@@ -35,7 +35,7 @@ override_dh_install:
 	mkdir -p ${SYS_DIR}
 
 	install -m 0750 ${BUILD_DIR}/target/release/synapse ${BIN_DIR}/
-	install -m 0640 ${BUILD_DIR}/config/config.yaml ${CONFIG_DIR}/
+	install -m 0640 ${BUILD_DIR}/config.yaml ${CONFIG_DIR}/
 	install -m 0640 ${BUILD_DIR}/pkg/deb/debian/copyright ${DOC_DIR}/
 	install -m 0644 ${BUILD_DIR}/pkg/synapse.service ${SYS_DIR}/
 	gzip -9 ${BUILD_DIR}/pkg/deb/debian/changelog -c -n > ${DOC_DIR}/changelog.Debian.gz
