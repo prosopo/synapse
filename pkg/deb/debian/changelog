@@ -1,0 +1,6 @@
+synapse (0.2.4-1) stable; urgency=medium
+
+  * Initial Synapse Debian package
+  * More info: https://github.com/gen0sec/synapse/releases
+
+ -- Gen0Sec <support@gen0sec.com>  Wed, 01 Jan 2025 00:00:00 +0000

@@ -125,9 +125,9 @@ pub async fn fetch_config(
         .map_err(|e| anyhow::anyhow!("Failed to get global HTTP client: {}", e))?;
 
     let url = format!("{}/config", base_url);
-
+    
     let response = client
-        .get(url)
+        .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Accept-Encoding", "gzip")
         .send()
@@ -192,6 +192,7 @@ pub async fn fetch_config(
                     };
                     format!("Failed to parse JSON response: {}. Response preview: {}", e, preview)
                 })?;
+            
             // Update global config snapshot
             set_global_config(body.config.clone());
             Ok(body)

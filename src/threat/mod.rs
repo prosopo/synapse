@@ -1,22 +1,17 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::{net::IpAddr, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use redis::AsyncCommands;
-use serde::{Deserialize, Deserializer, Serialize};
-use tokio::sync::OnceCell;
+use maxminddb::{geoip2, MaxMindDBError, Reader};
 use pingora_memory_cache::MemoryCache;
-
-use crate::redis::RedisManager;
-use crate::http_client::get_global_reqwest_client;
+use serde::{Deserialize, Deserializer, Serialize};
+use tokio::sync::{OnceCell, RwLock};
 
 /// Custom deserializer for optional datetime fields that can be empty strings or missing
 fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    // Try to deserialize as Option<String> first
     match Option::<String>::deserialize(deserializer)? {
         Some(s) => {
             if s.is_empty() {
@@ -31,7 +26,7 @@ where
     }
 }
 
-/// Threat intelligence response from Gen0Sec API
+/// Threat intelligence response (REST shape)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreatResponse {
     pub schema_version: String,
@@ -101,63 +96,93 @@ impl From<&ThreatResponse> for WafFields {
     }
 }
 
-/// Threat intelligence client with pingora-memory-cache and Redis caching
+/// Threat intel client: Threat MMDB first, then GeoIP MMDB fallback, with in-memory cache
 pub struct ThreatClient {
-    base_url: String,
-    api_key: String,
+    threat_mmdb_path: Option<PathBuf>,
+    geoip_country_path: Option<PathBuf>,
+    geoip_asn_path: Option<PathBuf>,
+    geoip_city_path: Option<PathBuf>,
+    threat_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
+    geoip_country_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
+    geoip_asn_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
+    geoip_city_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
     pingora_cache: Arc<MemoryCache<String, ThreatResponse>>,
 }
 
 impl ThreatClient {
     pub fn new(
-        base_url: String,
-        api_key: String,
+        threat_mmdb_path: Option<PathBuf>,
+        geoip_country_path: Option<PathBuf>,
+        geoip_asn_path: Option<PathBuf>,
+        geoip_city_path: Option<PathBuf>,
     ) -> Self {
         Self {
-            base_url,
-            api_key,
-            pingora_cache: Arc::new(MemoryCache::new(10000)),
+            threat_mmdb_path,
+            geoip_country_path,
+            geoip_asn_path,
+            geoip_city_path,
+            threat_reader: RwLock::new(None),
+            geoip_country_reader: RwLock::new(None),
+            geoip_asn_reader: RwLock::new(None),
+            geoip_city_reader: RwLock::new(None),
+            pingora_cache: Arc::new(MemoryCache::new(10_000)),
         }
     }
 
+    pub async fn refresh_threat(&self) -> Result<()> {
+        self.refresh_threat_reader().await.map(|_| ())
+    }
+
+    pub async fn refresh_geoip(&self) -> Result<()> {
+        // Refresh all geoip databases
+        if let Err(e) = self.refresh_geoip_country_reader().await {
+            log::warn!("Failed to refresh GeoIP Country database: {}", e);
+        }
+        if let Err(e) = self.refresh_geoip_asn_reader().await {
+            log::warn!("Failed to refresh GeoIP ASN database: {}", e);
+        }
+        if let Err(e) = self.refresh_geoip_city_reader().await {
+            log::warn!("Failed to refresh GeoIP City database: {}", e);
+        }
+        Ok(())
+    }
+
     /// Get threat intelligence for an IP address with caching
+    /// Priority: Cache → Threat MMDB → GeoIP MMDB (REST API disabled)
     pub async fn get_threat_intel(&self, ip: &str) -> Result<Option<ThreatResponse>> {
-        // Check pingora-memory-cache
-        let (cached_data, status) = self.pingora_cache.get(ip);
-        if let Some(data) = cached_data {
+        // L1 cache
+        let (cached, status) = self.pingora_cache.get(ip);
+        if let Some(data) = cached {
             if status.is_hit() {
                 log::debug!("Threat data for {} found in pingora-memory-cache", ip);
                 return Ok(Some(data));
             }
         }
 
-        // Check L2 cache (Redis) with TTL from API response
-        if let Some(cached) = self.get_l2_cache(ip).await? {
-            log::debug!("Threat data for {} found in L2 cache", ip);
-            // Store in pingora-memory-cache for faster access
-            self.set_pingora_cache(ip, &cached).await;
-            return Ok(Some(cached));
-        }
-
-        // Fetch from API
-        match self.fetch_from_api(ip).await {
-            Ok(Some(threat_data)) => {
-                log::debug!("Threat data for {} fetched from API", ip);
-
-                // Store in caches
-                self.set_pingora_cache(ip, &threat_data).await;
-                if let Err(e) = self.set_l2_cache(ip, &threat_data).await {
-                    log::warn!("Failed to store threat data in L2 cache: {}", e);
-                }
-
-                Ok(Some(threat_data))
-            }
-            Ok(None) => Ok(None),
+        let ip_addr: IpAddr = match ip.parse() {
+            Ok(v) => v,
             Err(e) => {
-                log::error!("Failed to fetch threat data for {}: {}", ip, e);
-                Err(e)
+                log::warn!("Invalid IP {}: {}", ip, e);
+                return Ok(None);
             }
+        };
+
+        // Check Threat MMDB first (if configured)
+        log::info!("🔍 [Threat] Checking Threat MMDB for {}", ip);
+        if let Some(threat_data) = self.lookup_threat_mmdb(ip, ip_addr).await? {
+            log::info!("🔍 [Threat] Found threat data in Threat MMDB for {}: score={}", ip, threat_data.intel.score);
+            self.set_pingora_cache(ip, &threat_data).await;
+            return Ok(Some(threat_data));
         }
+
+        // REST API disabled - skip directly to GeoIP fallback
+        log::info!("🔍 [Threat] No threat data found for {} in Threat MMDB, using GeoIP fallback", ip);
+
+        // GeoIP fallback
+        let (geo, asn, org) = self.lookup_geo(ip_addr).await?;
+        let response = build_no_data_response(ip, ip_addr, geo, asn, org);
+        self.set_pingora_cache(ip, &response).await;
+        Ok(Some(response))
     }
 
     /// Get WAF fields for an IP address
@@ -169,102 +194,285 @@ impl ThreatClient {
         }
     }
 
-    /// Fetch threat data from Gen0Sec API
-    async fn fetch_from_api(&self, ip: &str) -> Result<Option<ThreatResponse>> {
-        let url = format!("{}/threat?ip={}", self.base_url, ip);
 
-        // Use shared HTTP client with keepalive instead of creating new client
-        let client = get_global_reqwest_client()
-            .context("Failed to get global HTTP client")?;
+    /// Read the MMDB from the configured local path and keep it in memory
+    async fn refresh_threat_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        let path = self
+            .threat_mmdb_path
+            .clone()
+            .ok_or_else(|| anyhow!("Threat MMDB path not configured"))?;
 
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", &self.api_key))
-            .send()
+        let data = tokio::fs::read(&path)
             .await
-            .context("Failed to send HTTP request")?;
+            .with_context(|| format!("Failed to read Threat MMDB from {:?}", path))?;
 
-        if response.status() == 404 {
-            // IP not found in threat database
-            return Ok(None);
-        }
+        let reader = Reader::from_source(data)
+            .context("Failed to parse Threat MMDB data")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_else(|_| "Unable to read response body".to_string());
-            log::error!("API request failed with status: {}, body: {}", status, body);
-            return Err(anyhow::anyhow!(
-                "API request failed with status: {}",
-                status
-            ));
-        }
+        let arc = Arc::new(reader);
 
-        let response_text = response.text().await
-            .context("Failed to read response body")?;
+        let mut guard = self.threat_reader.write().await;
+        *guard = Some(arc.clone());
 
-        log::debug!("API response body: {}", response_text);
+        log::info!("Threat MMDB loaded from {:?}", path);
 
-        let threat_data: ThreatResponse = serde_json::from_str(&response_text)
-            .context("Failed to parse JSON response")?;
-
-        Ok(Some(threat_data))
+        Ok(arc)
     }
 
-    /// Get data from L2 cache (Redis)
-    async fn get_l2_cache(&self, ip: &str) -> Result<Option<ThreatResponse>> {
-        let redis_manager = match RedisManager::get() {
-            Ok(manager) => manager,
-            Err(_) => return Ok(None),
+    async fn refresh_geoip_country_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        let path = self
+            .geoip_country_path
+            .clone()
+            .ok_or_else(|| anyhow!("GeoIP Country MMDB path not configured"))?;
+
+        let data = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("Failed to read GeoIP Country MMDB from {:?}", path))?;
+
+        let reader = Reader::from_source(data)
+            .context("Failed to parse GeoIP Country MMDB data")?;
+
+        let arc = Arc::new(reader);
+
+        let mut guard = self.geoip_country_reader.write().await;
+        *guard = Some(arc.clone());
+
+        log::info!("GeoIP Country MMDB loaded from {:?}", path);
+
+        Ok(arc)
+    }
+
+    async fn refresh_geoip_asn_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        let path = self
+            .geoip_asn_path
+            .clone()
+            .ok_or_else(|| anyhow!("GeoIP ASN MMDB path not configured"))?;
+
+        let data = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("Failed to read GeoIP ASN MMDB from {:?}", path))?;
+
+        let reader = Reader::from_source(data)
+            .context("Failed to parse GeoIP ASN MMDB data")?;
+
+        let arc = Arc::new(reader);
+
+        let mut guard = self.geoip_asn_reader.write().await;
+        *guard = Some(arc.clone());
+
+        log::info!("GeoIP ASN MMDB loaded from {:?}", path);
+
+        Ok(arc)
+    }
+
+    async fn refresh_geoip_city_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        let path = self
+            .geoip_city_path
+            .clone()
+            .ok_or_else(|| anyhow!("GeoIP City MMDB path not configured"))?;
+
+        let data = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("Failed to read GeoIP City MMDB from {:?}", path))?;
+
+        let reader = Reader::from_source(data)
+            .context("Failed to parse GeoIP City MMDB data")?;
+
+        let arc = Arc::new(reader);
+
+        let mut guard = self.geoip_city_reader.write().await;
+        *guard = Some(arc.clone());
+
+        log::info!("GeoIP City MMDB loaded from {:?}", path);
+
+        Ok(arc)
+    }
+
+    async fn ensure_geoip_country_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        {
+            let guard = self.geoip_country_reader.read().await;
+            if let Some(existing) = guard.as_ref() {
+                return Ok(existing.clone());
+            }
+        }
+        self.refresh_geoip_country_reader().await
+    }
+
+    async fn ensure_geoip_asn_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        {
+            let guard = self.geoip_asn_reader.read().await;
+            if let Some(existing) = guard.as_ref() {
+                return Ok(existing.clone());
+            }
+        }
+        self.refresh_geoip_asn_reader().await
+    }
+
+    async fn ensure_geoip_city_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+        {
+            let guard = self.geoip_city_reader.read().await;
+            if let Some(existing) = guard.as_ref() {
+                return Ok(existing.clone());
+            }
+        }
+        self.refresh_geoip_city_reader().await
+    }
+
+    /// Look up threat intelligence from the Threat MMDB
+    async fn lookup_threat_mmdb(&self, ip: &str, ip_addr: IpAddr) -> Result<Option<ThreatResponse>> {
+        log::info!("🔍 [Threat MMDB] Starting lookup for {}", ip);
+
+        // Check if threat reader is available
+        let reader_opt = {
+            let guard = self.threat_reader.read().await;
+            guard.clone()
         };
 
-        let key = format!("{}:threat:{}", redis_manager.create_namespace("threat"), ip);
-        let mut redis = redis_manager.get_connection();
-
-        match redis.get::<_, Option<String>>(&key).await {
-            Ok(Some(data)) => {
-                match serde_json::from_str::<ThreatResponse>(&data) {
-                    Ok(threat_data) => Ok(Some(threat_data)),
-                    Err(e) => {
-                        log::warn!("Failed to deserialize cached threat data for key {}: {}. Clearing cache entry.", key, e);
-                        // Clear the invalid cache entry
-                        let _: () = redis.del(&key).await.unwrap_or_default();
-                        Ok(None)
-                    }
-                }
+        let reader = match reader_opt {
+            Some(r) => {
+                log::info!("🔍 [Threat MMDB] Reader available, performing lookup");
+                r
             }
-            Ok(None) => Ok(None),
+            None => {
+                log::warn!("🔍 [Threat MMDB] Reader not loaded, skipping threat lookup for {}", ip);
+                return Ok(None);
+            }
+        };
+
+        // Perform blocking MMDB lookup in a separate thread
+        let result = tokio::task::spawn_blocking({
+            let reader = reader.clone();
+            let ip_addr_clone = ip_addr;
+            move || -> Result<ThreatResponse, maxminddb::MaxMindDBError> {
+                reader.lookup(ip_addr_clone)
+            }
+        })
+        .await;
+
+        match result {
+            Ok(Ok(threat_data)) => {
+                log::info!("🔍 [Threat MMDB] Found data for {}: {:?}", ip, threat_data);
+                Ok(Some(threat_data))
+            }
+            Ok(Err(maxminddb::MaxMindDBError::AddressNotFoundError(_))) => {
+                log::debug!("🔍 [Threat MMDB] IP {} not found in database", ip);
+                Ok(None)
+            }
+            Ok(Err(e)) => {
+                log::warn!("🔍 [Threat MMDB] Lookup error for {}: {}", ip, e);
+                Ok(None)
+            }
             Err(e) => {
-                log::warn!("Redis get error for key {}: {}", key, e);
+                log::warn!("🔍 [Threat MMDB] Task error for {}: {}", ip, e);
                 Ok(None)
             }
         }
     }
 
-    /// Set data in pingora-memory-cache with TTL from API response
+    async fn lookup_geo(&self, ip: IpAddr) -> Result<(GeoInfo, u32, String)> {
+        log::debug!("🔍 [GeoIP] Looking up IP: {}", ip);
+
+        // ASN lookup (use ASN database if available, otherwise try country database)
+        let (asn_num, asn_org) = if let Ok(reader) = self.ensure_geoip_asn_reader().await {
+            tokio::task::spawn_blocking({
+            let reader = reader.clone();
+            let ip_clone = ip;
+            move || -> Result<(u32, String), MaxMindDBError> {
+                match reader.lookup::<geoip2::Asn>(ip_clone) {
+                    Ok(res) => {
+                        let asn = res.autonomous_system_number.unwrap_or(0);
+                        let org = res.autonomous_system_organization.unwrap_or("").to_string();
+                        log::info!("🔍 [GeoIP] ASN Lookup Success for {}: ASN={}, Org='{}'", ip_clone, asn, org);
+                        Ok((asn, org))
+                    }
+                    Err(e) => {
+                        log::warn!("🔍 [GeoIP] ASN Lookup FAILED for {}: {}", ip_clone, e);
+                        Ok((0, String::new()))
+                    }
+                }
+            }
+        })
+            .await??
+        } else {
+            (0, String::new())
+        };
+
+        // Country lookup (use country database if available, fallback to city database)
+        let reader2 = if let Ok(reader) = self.ensure_geoip_country_reader().await {
+            reader
+        } else if let Ok(reader) = self.ensure_geoip_city_reader().await {
+            reader
+        } else {
+            return Err(anyhow!("No GeoIP database available for country lookup"));
+        };
+        let (iso, country_name) = tokio::task::spawn_blocking({
+            let reader = reader2.clone();
+            let ip_clone = ip;
+            move || -> Result<(String, String), MaxMindDBError> {
+                match reader.lookup::<geoip2::Country>(ip_clone) {
+                    Ok(country) => {
+                        // Debug: Log the raw country data structure
+                        log::info!("🔍 [GeoIP] RAW Country Data for {}: {:?}", ip_clone, country);
+
+                        // Try multiple fields
+                        let iso = country
+                            .country
+                            .as_ref()
+                            .and_then(|c| c.iso_code)
+                            .unwrap_or("")
+                            .to_string();
+
+                        // Also try registered_country if country is empty
+                        let iso = if iso.is_empty() {
+                            country
+                                .registered_country
+                                .as_ref()
+                                .and_then(|c| c.iso_code)
+                                .unwrap_or("")
+                                .to_string()
+                        } else {
+                            iso
+                        };
+
+                        let country_name = country
+                            .country
+                            .as_ref()
+                            .and_then(|c| c.names.as_ref())
+                            .and_then(|n| n.get("en"))
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+
+                        if iso.is_empty() {
+                            log::warn!("🔍 [GeoIP] Country Lookup for {} returned EMPTY iso_code (IP found but no country data in ANY field)", ip_clone);
+                        } else {
+                            log::info!("🔍 [GeoIP] Country Lookup Success for {}: Country='{}' ({})", ip_clone, iso, country_name);
+                        }
+                        Ok((iso, country_name))
+                    }
+                    Err(e) => {
+                        log::warn!("🔍 [GeoIP] Country Lookup FAILED for {}: IP NOT FOUND in database - {}", ip_clone, e);
+                        Ok((String::new(), String::new()))
+                    }
+                }
+            }
+        })
+        .await??;
+
+        Ok((
+            GeoInfo {
+                country: country_name,
+                iso_code: iso.clone(),
+                asn_iso_code: iso,
+            },
+            asn_num,
+            asn_org,
+        ))
+    }
+
+    /// Set data in pingora-memory-cache with TTL from record
     async fn set_pingora_cache(&self, ip: &str, data: &ThreatResponse) {
         let ttl = Duration::from_secs(data.ttl_s);
         self.pingora_cache.put(ip, data.clone(), Some(ttl));
-    }
-
-    /// Set data in L2 cache (Redis) with TTL from API response
-    async fn set_l2_cache(&self, ip: &str, data: &ThreatResponse) -> Result<()> {
-        let redis_manager = match RedisManager::get() {
-            Ok(manager) => manager,
-            Err(_) => return Ok(()),
-        };
-
-        let key = format!("{}:threat:{}", redis_manager.create_namespace("threat"), ip);
-        let mut redis = redis_manager.get_connection();
-
-        let json_data = serde_json::to_string(data)
-            .context("Failed to serialize threat data")?;
-
-        let _: () = redis
-            .set_ex(&key, json_data, data.ttl_s)
-            .await
-            .context("Failed to store threat data in Redis")?;
-
-        Ok(())
     }
 }
 
@@ -273,15 +481,84 @@ static THREAT_CLIENT: OnceCell<Arc<ThreatClient>> = OnceCell::const_new();
 
 /// Initialize the global threat client
 pub async fn init_threat_client(
-    base_url: String,
-    api_key: String,
+    threat_mmdb_path: Option<PathBuf>,
+    geoip_country_path: Option<PathBuf>,
+    geoip_asn_path: Option<PathBuf>,
+    geoip_city_path: Option<PathBuf>,
 ) -> Result<()> {
-    let client = Arc::new(ThreatClient::new(base_url, api_key));
+    let client = Arc::new(ThreatClient::new(
+        threat_mmdb_path,
+        geoip_country_path,
+        geoip_asn_path,
+        geoip_city_path,
+    ));
 
-    THREAT_CLIENT.set(client)
+    // Best-effort initial load from local MMDB paths.
+    // If the files are not present yet, the workers can download them later.
+    if let Err(e) = client.refresh_threat_reader().await {
+        log::warn!("Initial Threat MMDB load failed: {}", e);
+    }
+
+    if let Err(e) = client.refresh_geoip_country_reader().await {
+        log::warn!("Initial GeoIP Country MMDB load failed: {}", e);
+    }
+    if let Err(e) = client.refresh_geoip_asn_reader().await {
+        log::warn!("Initial GeoIP ASN MMDB load failed: {}", e);
+    }
+    if let Err(e) = client.refresh_geoip_city_reader().await {
+        log::warn!("Initial GeoIP City MMDB load failed: {}", e);
+    }
+
+    THREAT_CLIENT
+        .set(client)
         .map_err(|_| anyhow::anyhow!("Failed to initialize threat client"))?;
 
     Ok(())
+}
+
+/// Trigger an immediate Threat MMDB refresh (used by worker)
+pub async fn refresh_threat_mmdb() -> Result<()> {
+    let client = THREAT_CLIENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+
+    client.refresh_threat().await
+}
+
+/// Trigger an immediate GeoIP MMDB refresh for all databases (used by worker)
+pub async fn refresh_geoip_mmdb() -> Result<()> {
+    let client = THREAT_CLIENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+
+    client.refresh_geoip().await
+}
+
+/// Trigger an immediate GeoIP Country MMDB refresh (used by worker)
+pub async fn refresh_geoip_country_mmdb() -> Result<()> {
+    let client = THREAT_CLIENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+
+    client.refresh_geoip_country_reader().await.map(|_| ())
+}
+
+/// Trigger an immediate GeoIP ASN MMDB refresh (used by worker)
+pub async fn refresh_geoip_asn_mmdb() -> Result<()> {
+    let client = THREAT_CLIENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+
+    client.refresh_geoip_asn_reader().await.map(|_| ())
+}
+
+/// Trigger an immediate GeoIP City MMDB refresh (used by worker)
+pub async fn refresh_geoip_city_mmdb() -> Result<()> {
+    let client = THREAT_CLIENT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+
+    client.refresh_geoip_city_reader().await.map(|_| ())
 }
 
 /// Get threat intelligence for an IP address
@@ -293,6 +570,14 @@ pub async fn get_threat_intel(ip: &str) -> Result<Option<ThreatResponse>> {
     client.get_threat_intel(ip).await
 }
 
+/// Get access to a version cache (separate from threat response cache)
+/// Uses the same pingora-memory-cache pattern as the threat response cache
+pub fn get_version_cache() -> Result<Arc<MemoryCache<String, String>>> {
+    use std::sync::OnceLock;
+    static VERSION_CACHE: OnceLock<Arc<MemoryCache<String, String>>> = OnceLock::new();
+    Ok(VERSION_CACHE.get_or_init(|| Arc::new(MemoryCache::new(100))).clone())
+}
+
 /// Get WAF fields for an IP address
 pub async fn get_waf_fields(ip: &str) -> Result<Option<WafFields>> {
     let client = THREAT_CLIENT
@@ -301,3 +586,35 @@ pub async fn get_waf_fields(ip: &str) -> Result<Option<WafFields>> {
 
     client.get_waf_fields(ip).await
 }
+
+
+fn build_no_data_response(ip: &str, ip_addr: IpAddr, geo: GeoInfo, asn: u32, org: String) -> ThreatResponse {
+    ThreatResponse {
+        schema_version: "1.0".to_string(),
+        tenant_id: "geoip".to_string(),
+        ip: ip.to_string(),
+        intel: ThreatIntel {
+            score: 0,
+            confidence: 0.0,
+            score_version: "geoip".to_string(),
+            categories: vec![],
+            tags: vec![],
+            first_seen: None,
+            last_seen: None,
+            source_count: 0,
+            reason_code: "NO_DATA".to_string(),
+            reason_summary: "No threat data available".to_string(),
+            rule_id: "none".to_string(),
+        },
+        context: ThreatContext {
+            asn,
+            org,
+            ip_version: if ip_addr.is_ipv4() { 4 } else { 6 },
+            geo,
+        },
+        advice: "allow".to_string(),
+        ttl_s: 300,
+        generated_at: Utc::now(),
+    }
+}
+

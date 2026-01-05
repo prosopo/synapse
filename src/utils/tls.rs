@@ -39,10 +39,9 @@ struct CertificateInfo {
     common_names: Vec<String>,
     alt_names: Vec<String>,
     ssl_context: SslContext,
-    #[allow(dead_code)]
-    cert_path: String, // Only used for logging
-    #[allow(dead_code)]
-    key_path: String, // Only used for logging
+    cert_path: String,
+    #[allow(dead_code)] // Used during Certificates initialization
+    key_path: String,
 }
 
 #[derive(Clone, Debug)]
@@ -436,11 +435,11 @@ fn load_cert_info(cert_path: &str, key_path: &str, _grade: &str) -> Option<Certi
     match create_ssl_context(cert_path, key_path) {
         Ok(ssl_context) => {
             Some(CertificateInfo {
-                cert_path: cert_path.to_string(),
-                key_path: key_path.to_string(),
                 common_names: common_names.into_iter().collect(),
                 alt_names: alt_names.into_iter().collect(),
                 ssl_context,
+                cert_path: cert_path.to_string(),
+                key_path: key_path.to_string(),
             })
         }
         Err(e) => {

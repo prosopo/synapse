@@ -432,9 +432,12 @@ impl HttpFilter {
 
         // Fetch threat intelligence data for the source IP
         // Fetch full threat response for access logging, and WAF fields for rule evaluation
+        log::info!("🔍 [WAF] Looking up GeoIP for: {}", peer_addr.ip());
         let threat_response = threat::get_threat_intel(&peer_addr.ip().to_string()).await.ok().flatten();
         let _threat_fields = if let Some(ref threat_resp) = threat_response {
             let waf_fields = threat::WafFields::from(threat_resp);
+            log::info!("🔍 [WAF] GeoIP Result: Country='{}', ASN={}, ThreatScore={}", 
+                waf_fields.ip_src_country, waf_fields.ip_src_asn, waf_fields.threat_score);
             // Set threat intelligence fields
             ctx.set_field_value(
                 self.scheme.get_field("ip.src.country").unwrap(),
@@ -463,6 +466,7 @@ impl HttpFilter {
             Some(waf_fields)
         } else {
             // No threat data found, set default values
+            log::warn!("🔍 [WAF] No GeoIP data found for {}, setting empty country", peer_addr.ip());
             ctx.set_field_value(
                 self.scheme.get_field("ip.src.country").unwrap(),
                 "",
