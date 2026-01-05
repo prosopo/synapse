@@ -259,7 +259,7 @@ jobs:
           retention-days: 5
 
   publish-artifacts:
-      needs: [ package-build-amd64, package-build-arm64 ]
+      needs: [ package-build-amd64, package-build-arm64, build-artifacts ]
       runs-on: ubuntu-latest
 
       steps:
