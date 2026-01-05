@@ -226,14 +226,14 @@ jobs:
 
       - name: Package build
         run: |
-          mkdir -p /tmp/${{ github.sha }}
-          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ github.sha }}:/tmp/output --rm synapse-builder:latest ${{ github.ref_name }}
+          mkdir -p /tmp/${{ github.ref_name }}
+          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ github.ref_name }}:/tmp/output --rm synapse-builder:latest ${{ github.ref_name }}
 
       - name: Archive output package
         uses: actions/upload-artifact@v4
         with:
-          name: synapse_${{ github.sha }}_amd64.deb
-          path: /tmp/${{ github.sha }}/synapse*.deb
+          name: synapse_${{ github.ref_name }}_amd64.deb
+          path: /tmp/${{ github.ref_name }}/synapse*.deb
           retention-days: 5
 
   package-build-arm64:
@@ -248,14 +248,14 @@ jobs:
 
       - name: Package build
         run: |
-          mkdir -p /tmp/${{ github.sha }}
-          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ github.sha }}:/tmp/output --rm synapse-builder:latest ${{ github.ref_name }}
+          mkdir -p /tmp/${{ github.ref_name }}
+          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ github.ref_name }}:/tmp/output --rm synapse-builder:latest ${{ github.ref_name }}
 
       - name: Archive output package
         uses: actions/upload-artifact@v4
         with:
-          name: synapse_${{ github.sha }}_arm64.deb
-          path: /tmp/${{ github.sha }}/synapse*.deb
+          name: synapse_${{ github.ref_name }}_arm64.deb
+          path: /tmp/${{ github.ref_name }}/synapse*.deb
           retention-days: 5
 
   publish-artifacts:
@@ -284,5 +284,7 @@ jobs:
           draft: true
           discussion_category_name: Releases
           generate_release_notes: true
-          files: synapse-*/synapse-*
+          files: |
+            synapse-*/synapse-*
+            synapse_*.deb
           make_latest: true
