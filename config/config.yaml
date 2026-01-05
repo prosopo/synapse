@@ -266,7 +266,7 @@ pingora:
   proxy_address_tls: "0.0.0.0:443"
 
   # Mandatory if proxy_address_tls is set (cert files: {NAME}.crt, {NAME}.key)
-  proxy_certificates: "/root/synapse/certs"
+  proxy_certificates: "/etc/synapse/certs"
 
   # TLS suite grade (high, medium, unsafe)
   proxy_tls_grade: "medium"
@@ -276,7 +276,7 @@ pingora:
   default_certificate: "default"
 
   # Path to upstreams configuration file
-  upstreams_conf: "/root/synapse/upstreams.yaml"
+  upstreams_conf: "/etc/synapse/upstreams.yaml"
 
   # HTTP API address for remote config updates
   config_address: "0.0.0.0:3000"

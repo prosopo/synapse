@@ -1,67 +1,49 @@
-# Upstreams Configuration for Pingora Proxy - Consul Provider
-# This file demonstrates Consul service discovery configuration
-#
-# Schema Version: New format with nested config: section
-
-# Provider type: "consul"
-provider: "consul"
-
-# Global configuration section (new format)
+provider: "file" # "file" "consul" "kubernetes"
 config:
-  # Enable HTTPS proxy redirects globally
-  force_https: false
-
-  # Enable sticky sessions (session affinity) globally
-  sticky_sessions: true
-
-  # Global rate limit (requests per second)
-  global_rate_limit: 200
-
-  # Global headers to add to all responses
+  https_proxy_enabled: false
+  sticky_sessions: false
+  global_rate_limit: 100
   global_headers:
     - "Access-Control-Allow-Origin:*"
-    - "X-Proxy-From:Consul-Synapse"
+    - "Access-Control-Allow-Methods:POST, GET, OPTIONS"
+    - "Access-Control-Max-Age:86400"
+    - "Strict-Transport-Security:max-age=31536000; includeSubDomains; preload"
 
-# Gen0Sec paths - Global paths that work across ALL hostnames
-# These paths are evaluated BEFORE hostname-specific routing and Consul service discovery
-# Perfect for common endpoints like captcha, health checks, admin panels, etc.
 arxignis_paths:
-  # Example: Captcha verification endpoint
   "/cgi-bin/captcha/verify":
     rate_limit: 200
-    force_https: false
+    https_proxy_enabled: false
     ssl_enabled: false
     servers:
       - "127.0.0.1:3001"
 
-# Consul configuration
-consul:
-  # Consul server addresses (can specify multiple for HA)
-  servers:
-    - "consul1.example.com:8500"
-    - "consul2.example.com:8500"
-    - "consul3.example.com:8500"
+  "/.well-known/acme-challenge/*":
+    rate_limit: 200
+    https_proxy_enabled: false
+    ssl_enabled: false
+    servers:
+      - "127.0.0.1:9180"
+  "/health":
+    rate_limit: 100
+    https_proxy_enabled: false
+    ssl_enabled: false
+    disable_access_log: true  # Disable access logs for health checks to reduce noise
+    servers:
+      - "127.0.0.1:8000"
 
-  # Consul ACL token (optional, for authentication)
-  token: "your-consul-acl-token-here"
-
-  # Services to discover from Consul
-  services:
-    # Example service mapping
-    - upstream: "http://service-name.service.consul:8080"
-      hostname: "api.example.com"
-      path: "/"
-      force_https: false
-      rate_limit: 500
-      headers:
-        - "X-Service-Name:api"
-
-    # Another service with different path
-    - upstream: "http://web-service.service.consul:80"
-      hostname: "web.example.com"
-      path: "/"
-      force_https: true
-      rate_limit: 1000
-      headers:
-        - "X-Service-Name:web"
-
+upstreams:
+  example.com:
+    certificate: "example.com"
+    acme:
+      challenge_type: "dns-01"
+      email: "<EMAIL>"
+      wildcard: true
+    paths:
+      "/":
+        rate_limit: 200
+        force_https: true
+        ssl_enabled: true
+        headers:
+          - "Host: whoami.arxignis.com"
+        servers:
+          - "whoami.arxignis.com:443"

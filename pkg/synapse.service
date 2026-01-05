@@ -17,7 +17,7 @@ Type=forking
 PIDFile=/var/run/synapse.pid
 
 # Paths
-ExecStart=/usr/local/bin/synapse --daemon --config /etc/synapse/config.yaml
+ExecStart=/usr/bin/synapse --daemon --config /etc/synapse/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStop=/bin/kill -TERM $MAINPID
 

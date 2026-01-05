@@ -9,13 +9,14 @@ export DH_VERBOSE=1
 export DH_OPTIONS
 
 # Package build options
-export BUILD_DIR="../.."
 export TARGET_DIR="${CURDIR}/debian/synapse"
 export PKG_DIR="${TARGET_DIR}/usr"
 export CONFIG_DIR="${TARGET_DIR}/etc/synapse"
+export CERTS_DIR="${TARGET_DIR}/etc/synapse/certs"
 export BIN_DIR="${PKG_DIR}/bin"
 export DOC_DIR="${PKG_DIR}/share/doc/synapse"
 export SYS_DIR="${TARGET_DIR}/lib/systemd/system"
+export LOG_DIR="${TARGET_DIR}/var/log/synapse"
 
 %:
 	dh $@ --with=systemd
@@ -23,22 +24,36 @@ export SYS_DIR="${TARGET_DIR}/lib/systemd/system"
 override_dh_clean:
 
 override_dh_install:
-	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-	${HOME}/.cargo/bin/rustup default stable && ${HOME}/.cargo/bin/rustup update stable
-
-	echo ${CURDIR}
-	cd ${BUILD_DIR} && ${HOME}/.cargo/bin/cargo build --release
-
-	mkdir -p ${CONFIG_DIR}
-	mkdir -p ${BIN_DIR}
-	mkdir -p ${DOC_DIR}
-	mkdir -p ${SYS_DIR}
-
-	install -m 0750 ${BUILD_DIR}/target/release/synapse ${BIN_DIR}/
-	install -m 0640 ${BUILD_DIR}/config.yaml ${CONFIG_DIR}/
-	install -m 0640 ${BUILD_DIR}/pkg/deb/debian/copyright ${DOC_DIR}/
-	install -m 0644 ${BUILD_DIR}/pkg/synapse.service ${SYS_DIR}/
-	gzip -9 ${BUILD_DIR}/pkg/deb/debian/changelog -c -n > ${DOC_DIR}/changelog.Debian.gz
+	BUILD_DIR=$$(cd ../.. && pwd); \
+	mkdir -p ${CONFIG_DIR}; \
+	mkdir -p ${CERTS_DIR}; \
+	mkdir -p ${BIN_DIR}; \
+	mkdir -p ${DOC_DIR}; \
+	mkdir -p ${SYS_DIR}; \
+	mkdir -p ${LOG_DIR}; \
+	if [ -f $${BUILD_DIR}/target/release/synapse ]; then \
+		install -m 0750 $${BUILD_DIR}/target/release/synapse ${BIN_DIR}/; \
+	elif [ -f $${BUILD_DIR}/synapse ]; then \
+		install -m 0750 $${BUILD_DIR}/synapse ${BIN_DIR}/; \
+	else \
+		echo "synapse binary not found in $${BUILD_DIR}/target/release/synapse or $${BUILD_DIR}/synapse"; \
+		exit 1; \
+	fi; \
+	if [ -f $${BUILD_DIR}/config/config.yaml ]; then \
+		install -m 0640 $${BUILD_DIR}/config/config.yaml ${CONFIG_DIR}/; \
+	else \
+		echo "config.yaml not found"; \
+		exit 1; \
+	fi; \
+	if [ -f $${BUILD_DIR}/config/upstreams.yaml ]; then \
+		install -m 0640 $${BUILD_DIR}/config/upstreams.yaml ${CONFIG_DIR}/; \
+	else \
+		echo "upstreams.yaml not found"; \
+		exit 1; \
+	fi; \
+	install -m 0640 $${BUILD_DIR}/pkg/deb/debian/copyright ${DOC_DIR}/; \
+	install -m 0644 $${BUILD_DIR}/pkg/synapse.service ${SYS_DIR}/; \
+	gzip -9 $${BUILD_DIR}/pkg/deb/debian/changelog -c -n > ${DOC_DIR}/changelog.Debian.gz
 
 override_dh_installdocs:
 
