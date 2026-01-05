@@ -12,7 +12,8 @@ on:
   workflow_dispatch:
 
 env:
-  MOAT_REGISTRY_IMAGE: ghcr.io/gen0sec/synapse
+  SYNAPSE_REGISTRY_IMAGE: ghcr.io/gen0sec/synapse
+  VERSION: ""
 
 jobs:
   docker-prepare:
@@ -37,7 +38,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.MOAT_REGISTRY_IMAGE }}
+          images: ${{ env.SYNAPSE_REGISTRY_IMAGE }}
           tags: |
             type=sha,format=short
             type=match,pattern=v(\d+\.\d+\.\d+),group=1
@@ -99,7 +100,7 @@ jobs:
             cwd://${{ runner.temp }}/synapse-bake-meta.json
           targets: image
           set: |
-            *.tags=${{ env.MOAT_REGISTRY_IMAGE }}
+            *.tags=${{ env.SYNAPSE_REGISTRY_IMAGE }}
             *.platform=${{ matrix.platform }}
             *.output=type=image,push-by-digest=true,name-canonical=true,push=true
 
@@ -148,12 +149,12 @@ jobs:
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
         run: |
-          docker buildx imagetools create $(jq -cr '.target."docker-metadata-action".tags | map(select(startswith("${{ env.MOAT_REGISTRY_IMAGE }}")) | "-t " + .) | join(" ")' ${{ runner.temp }}/synapse-bake-meta.json) \
-            $(printf '${{ env.MOAT_REGISTRY_IMAGE }}@sha256:%s ' *)
+          docker buildx imagetools create $(jq -cr '.target."docker-metadata-action".tags | map(select(startswith("${{ env.SYNAPSE_REGISTRY_IMAGE }}")) | "-t " + .) | join(" ")' ${{ runner.temp }}/synapse-bake-meta.json) \
+            $(printf '${{ env.SYNAPSE_REGISTRY_IMAGE }}@sha256:%s ' *)
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.MOAT_REGISTRY_IMAGE }}:$(jq -r '.target."docker-metadata-action".args.DOCKER_META_VERSION' ${{ runner.temp }}/synapse-bake-meta.json)
+          docker buildx imagetools inspect ${{ env.SYNAPSE_REGISTRY_IMAGE }}:$(jq -r '.target."docker-metadata-action".args.DOCKER_META_VERSION' ${{ runner.temp }}/synapse-bake-meta.json)
 
 
   build-artifacts:
@@ -221,19 +222,22 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - name: Build Docker image
         run: docker build -t synapse-builder:latest -f pkg/deb/docker/Dockerfile pkg/deb/docker/
 
       - name: Package build
         run: |
-          mkdir -p /tmp/${{ github.ref_name }}
-          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ github.ref_name }}:/tmp/output --rm synapse-builder:latest ${{ github.ref_name }}
+          mkdir -p /tmp/${{ env.VERSION }}
+          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ env.VERSION }}:/tmp/output --rm synapse-builder:latest ${{ env.VERSION }}
 
       - name: Archive output package
         uses: actions/upload-artifact@v4
         with:
-          name: synapse_${{ github.ref_name }}_amd64.deb
-          path: /tmp/${{ github.ref_name }}/synapse*.deb
+          name: synapse_${{ env.VERSION }}_amd64.deb
+          path: /tmp/${{ env.VERSION }}/synapse*.deb
           retention-days: 5
 
   package-build-arm64:
@@ -243,19 +247,22 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - name: Build Docker image
         run: docker build -t synapse-builder:latest -f pkg/deb/docker/Dockerfile pkg/deb/docker/
 
       - name: Package build
         run: |
-          mkdir -p /tmp/${{ github.ref_name }}
-          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ github.ref_name }}:/tmp/output --rm synapse-builder:latest ${{ github.ref_name }}
+          mkdir -p /tmp/${{ env.VERSION }}
+          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ env.VERSION }}:/tmp/output --rm synapse-builder:latest ${{ env.VERSION }}
 
       - name: Archive output package
         uses: actions/upload-artifact@v4
         with:
-          name: synapse_${{ github.ref_name }}_arm64.deb
-          path: /tmp/${{ github.ref_name }}/synapse*.deb
+          name: synapse_${{ env.VERSION }}_arm64.deb
+          path: /tmp/${{ env.VERSION }}/synapse*.deb
           retention-days: 5
 
   publish-artifacts:
@@ -286,5 +293,5 @@ jobs:
           generate_release_notes: true
           files: |
             synapse-*/synapse-*
-            synapse_*.deb
+            synapse-*/synapse_*.deb
           make_latest: true
