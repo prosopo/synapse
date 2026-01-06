@@ -1,0 +1,196 @@
+# Security Rules Configuration File
+# This file is used when no Gen0Sec API key is provided
+# It contains access rules and WAF rules that would normally be fetched from the API
+#
+# Note: When using this local config, the following features will NOT be available:
+# - Real-time threat intelligence (threat.score, ip.src.country, ip.src.asn in WAF rules)
+# - Dynamic rule updates (requires application restart to update rules)
+# - Centralized event logging and analytics
+# - Per-IP geolocation and reputation data
+
+# Access Rules - IP allow/block lists
+access_rules:
+  id: "local-rules"
+  name: "Local Access Rules"
+  description: "Static access rules loaded from local configuration file"
+  
+  # Allow list - IPs that are always allowed
+  allow:
+    # Direct IP addresses (IPv4 or IPv6)
+    ips:
+      - "127.0.0.1"
+      - "::1"
+      # Example trusted IPs
+      # - "192.168.1.0/24"
+      # - "10.0.0.0/8"
+    
+    # Country-based allow rules (optional)
+    # Note: Without API, you must manually provide IP ranges for countries
+    country: []
+      # Example:
+      # - US:
+      #   - "1.2.3.0/24"
+      #   - "5.6.7.0/24"
+    
+    # ASN-based allow rules (optional)
+    asn: []
+      # Example:
+      # - "12345":
+      #   - "8.8.8.0/24"
+  
+  # Block list - IPs that should be blocked
+  block:
+    # Direct IP addresses and CIDR ranges
+    ips: []
+      # Example blocked IPs:
+      # - "192.0.2.1"
+      # - "198.51.100.0/24"
+      # - "2001:db8::/32"
+    
+    # Country-based block rules (optional)
+    country: []
+      # Example: Block specific country IP ranges
+      # - CN:
+      #   - "1.2.3.0/24"
+      # - RU:
+      #   - "5.6.7.0/24"
+    
+    # ASN-based block rules (optional)
+    asn: []
+      # Example: Block specific ASN ranges
+      # - "12345":
+      #   - "10.20.30.0/24"
+
+# WAF Rules - Web Application Firewall rules using Wirefilter expressions
+waf_rules:
+  rules:
+    # Example: Block SQL injection attempts
+    - id: "waf-001"
+      name: "Block SQL Injection"
+      org_id: "local"
+      description: "Block requests with SQL injection patterns"
+      action: "block"
+      expression: 'http.request.body contains "DROP TABLE" or http.request.body contains "UNION SELECT" or http.request.query contains "1=1"'
+    
+    # Example: Block XSS attempts
+    - id: "waf-002"
+      name: "Block XSS"
+      org_id: "local"
+      description: "Block requests with XSS patterns"
+      action: "block"
+      expression: 'http.request.body contains "<script>" or http.request.query contains "<script>"'
+    
+    # Example: Rate limit API endpoints
+    # Note: Rate limiting requires API key for full functionality
+    # - id: "waf-003"
+    #   name: "Rate Limit API"
+    #   org_id: "local"
+    #   description: "Rate limit requests to /api endpoints"
+    #   action: "ratelimit"
+    #   expression: 'starts_with(http.request.path, "/api/")'
+    #   config:
+    #     rateLimit:
+    #       period: "60"      # Time window in seconds
+    #       duration: "60"    # How long to enforce limit
+    #       requests: "100"   # Max requests in period
+    
+    # Example: Block access to admin panel from non-localhost
+    - id: "waf-004"
+      name: "Restrict Admin Access"
+      org_id: "local"
+      description: "Block admin panel access from non-localhost IPs"
+      action: "block"
+      expression: 'starts_with(http.request.path, "/admin") and not (ip.src == 127.0.0.1 or ip.src == ::1)'
+    
+    # Example: Block large POST requests (potential DoS)
+    - id: "waf-005"
+      name: "Block Large POST"
+      org_id: "local"
+      description: "Block POST requests larger than 10MB"
+      action: "block"
+      expression: 'http.request.method eq "POST" and http.request.content_length > 10485760'
+    
+    # Example: Require specific user agent
+    # - id: "waf-006"
+    #   name: "Block Empty User Agent"
+    #   org_id: "local"
+    #   description: "Block requests with empty user agent"
+    #   action: "block"
+    #   expression: 'http.request.user_agent eq ""'
+    
+    # Example: Block specific paths
+    # - id: "waf-007"
+    #   name: "Block Hidden Files"
+    #   org_id: "local"
+    #   description: "Block access to hidden files and directories"
+    #   action: "block"
+    #   expression: 'http.request.path contains "/." or http.request.path contains "/.env"'
+
+# Content Scanning Configuration (optional - can also be in main config)
+content_scanning:
+  enabled: false
+  clamav_server: "localhost:3310"
+  max_file_size: 10485760  # 10MB
+  scan_content_types:
+    - "text/html"
+    - "application/x-www-form-urlencoded"
+    - "multipart/form-data"
+    - "application/json"
+    - "text/plain"
+  skip_extensions: []
+  scan_expression: 'http.request.method eq "POST" or http.request.method eq "PUT"'
+
+# Metadata
+created_at: "2024-01-01T00:00:00Z"
+updated_at: "2024-01-01T00:00:00Z"
+last_modified: "2024-01-01T00:00:00Z"
+
+# Notes for WAF rule expressions:
+# 
+# Available fields (when NOT using API/threat intelligence):
+# - http.request.method (GET, POST, etc.)
+# - http.request.scheme (http, https)
+# - http.request.host
+# - http.request.port
+# - http.request.path
+# - http.request.uri
+# - http.request.query
+# - http.request.user_agent
+# - http.request.content_type
+# - http.request.content_length
+# - http.request.body
+# - http.request.body_sha256
+# - http.request.headers (map)
+# - ip.src (source IP address)
+# - signal.ja4h (HTTP fingerprint)
+# - signal.ja4h_method
+# - signal.ja4h_version
+# - signal.ja4h_has_cookie
+# - signal.ja4h_has_referer
+# - signal.ja4h_header_count
+# - signal.ja4h_language
+#
+# Unavailable fields without API (will be empty/zero):
+# - threat.score
+# - threat.advice
+# - ip.src.country
+# - ip.src.asn
+# - ip.src.asn_org
+# - ip.src.asn_country
+# - signal.ja4 (TLS fingerprint - requires TLS interception)
+# - signal.ja4t (TCP fingerprint - collected but not in WAF context)
+#
+# Operators:
+# - eq, ne (equals, not equals)
+# - gt, ge, lt, le (greater than, greater or equal, less than, less or equal)
+# - contains, starts_with, ends_with
+# - in (check if value in list)
+# - matches (regex match)
+#
+# Functions:
+# - lower(), upper() - convert to lowercase/uppercase
+# - len() - get length
+# - concat() - concatenate strings
+# - any(), all() - check arrays
+# - cidr() - check if IP in CIDR range
+
