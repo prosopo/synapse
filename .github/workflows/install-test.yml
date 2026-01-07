@@ -32,35 +32,78 @@ jobs:
 
   Build-install-fedora:
     runs-on: ubuntu-latest
-    container:
-      image: fedora:latest
-      options: --privileged -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run:exec
     steps:
-      - name: Install dependencies
-        run: |
-          dnf install -y systemd git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
 
-      - name: Building package
+      - name: Start Fedora systemd container (PID 1) + install deps
+        shell: bash
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          ./builder.sh
-        working-directory: ./pkg/rpm
+          set -euxo pipefail
 
-      - name: Installing package
-        run: dnf install -y ./synapse*.rpm
-        working-directory: ./pkg/rpm
+          # Start systemd as PID 1 
+          docker run -d --name synapse-rpm-test \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            --tmpfs /run \
+            --tmpfs /run/lock \
+            --tmpfs /tmp \
+            -v "${GITHUB_WORKSPACE}:/workspace:rw" \
+            -w /workspace \
+            fedora:latest \
+            /sbin/init
+
+          # Wait for systemd to come up
+          for i in {1..30}; do
+            if docker exec synapse-rpm-test systemctl is-system-running --wait >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec synapse-rpm-test systemctl is-system-running --wait || true
+
+          # Install build/runtime deps inside the RPM OS
+          docker exec synapse-rpm-test bash -lc '
+            dnf install -y systemd git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          '
+
+      - name: Build RPM inside Fedora
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test bash -lc '
+            export PATH="$HOME/.cargo/bin:$PATH"
+            cd /workspace/pkg/rpm
+            ./builder.sh
+          '
+
+      - name: Install RPM inside Fedora
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test bash -lc '
+            cd /workspace/pkg/rpm
+            dnf install -y ./synapse*.rpm
+          '
 
       - name: Start Synapse service
-        run: systemctl start synapse
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test systemctl start synapse
 
       - name: Check Synapse running
-        run: systemctl status synapse
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test systemctl status synapse --no-pager
 
       - name: Remove package installation
         if: always()
-        run: dnf remove -y synapse || true
+        shell: bash
+        run: |
+          set +e
+          docker exec synapse-rpm-test dnf remove -y synapse
+          docker rm -f synapse-rpm-test
