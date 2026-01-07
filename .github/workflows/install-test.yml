@@ -36,6 +36,20 @@ jobs:
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
 
+      - name: Build systemd-enabled Fedora image
+        shell: bash
+        run: |
+          set -euxo pipefail
+          
+          # Create a Dockerfile for systemd-enabled Fedora
+          cat > /tmp/Dockerfile.fedora-systemd << 'EOF'
+          FROM fedora:latest
+          RUN dnf install -y systemd systemd-libs && dnf clean all
+          CMD ["/usr/lib/systemd/systemd"]
+          EOF
+          
+          docker build -t fedora-systemd -f /tmp/Dockerfile.fedora-systemd /tmp
+
       - name: Start Fedora systemd container (PID 1) + install deps
         shell: bash
         run: |
@@ -48,24 +62,24 @@ jobs:
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             --tmpfs /run \
             --tmpfs /run/lock \
-            --tmpfs /tmp \
+            --tmpfs /tmp:exec \
             -v "${GITHUB_WORKSPACE}:/workspace:rw" \
             -w /workspace \
-            fedora:latest \
-            /sbin/init
+            fedora-systemd
 
           # Wait for systemd to come up
+          sleep 5
           for i in {1..30}; do
             if docker exec synapse-rpm-test systemctl is-system-running --wait >/dev/null 2>&1; then
               break
             fi
             sleep 1
           done
-          docker exec synapse-rpm-test systemctl is-system-running --wait || true
+          docker exec synapse-rpm-test systemctl is-system-running || true
 
           # Install build/runtime deps inside the RPM OS
           docker exec synapse-rpm-test bash -lc '
-            dnf install -y systemd git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
+            dnf install -y git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
             curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           '
 
