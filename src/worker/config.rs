@@ -312,16 +312,92 @@ impl Worker for ConfigWorker {
                     }
                 }
 
-                // In local mode, don't set up periodic updates - just wait for shutdown
-                log::info!("[{}] Running in local config mode - periodic updates disabled", worker_name);
-                log::info!("[{}] To update rules, modify {} and restart the application", worker_name, security_rules_config_path.display());
+                // Set up file watcher for automatic reloading
+                log::info!("[{}] Running in local config mode - watching {} for changes", 
+                    worker_name, security_rules_config_path.display());
                 
-                // Wait for shutdown signal
+                // Set up file watcher
+                use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+                use notify::event::ModifyKind;
+                use std::time::{Duration, Instant};
+                use std::path::Path;
+                use tokio::task;
+                
+                let file_path = security_rules_config_path.clone();
+                let parent_dir = Path::new(&file_path).parent().unwrap().to_path_buf();
+                let (local_tx, mut local_rx) = tokio::sync::mpsc::channel::<notify::Result<Event>>(1);
+
+                let _watcher_handle = task::spawn_blocking({
+                    let parent_dir = parent_dir.clone();
+                    move || {
+                        let mut watcher = RecommendedWatcher::new(
+                            move |res| {
+                                let _ = local_tx.blocking_send(res);
+                            },
+                            NotifyConfig::default(),
+                        ).expect("Failed to create file watcher");
+                        watcher.watch(&parent_dir, RecursiveMode::NonRecursive)
+                            .expect("Failed to watch security rules directory");
+                        let (_rtx, mut rrx) = tokio::sync::mpsc::channel::<bool>(1);
+                        let _ = rrx.blocking_recv();
+                    }
+                });
+
+                let mut last_reload = Instant::now();
+                
                 loop {
                     tokio::select! {
                         _ = shutdown.changed() => {
                             if *shutdown.borrow() {
                                 break;
+                            }
+                        }
+                        event = local_rx.recv() => {
+                            if let Some(event) = event {
+                                match event {
+                                    Ok(e) => {
+                                        match e.kind {
+                                            EventKind::Modify(ModifyKind::Data(_)) | EventKind::Create(..) | EventKind::Remove(..) => {
+                                                // Check if the modified file is the security_rules file
+                                                let is_target_file = e.paths.iter().any(|p| {
+                                                    p.to_str().map_or(false, |s| {
+                                                        s.ends_with("yaml") && 
+                                                        p.file_name() == file_path.file_name()
+                                                    })
+                                                });
+                                                
+                                                if is_target_file && last_reload.elapsed() > Duration::from_secs(2) {
+                                                    last_reload = Instant::now();
+                                                    log::info!("[{}] Security rules file changed, reloading...", worker_name);
+                                                    
+                                                    match load_config_from_file(&file_path).await {
+                                                        Ok(config_response) => {
+                                                            log::info!("[{}] Config reloaded successfully (access_rules: {}, waf_rules: {})",
+                                                                worker_name,
+                                                                config_response.config.access_rules.allow.ips.len() + config_response.config.access_rules.block.ips.len(),
+                                                                config_response.config.waf_rules.rules.len()
+                                                            );
+                                                            
+                                                            // Apply rules to BPF maps
+                                                            if !skels.is_empty() {
+                                                                if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&skels) {
+                                                                    log::error!("[{}] Failed to apply rules from reloaded config: {}", worker_name, e);
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            log::error!("[{}] Failed to reload config from local file: {}", worker_name, e);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!("[{}] File watch error: {:?}", worker_name, e);
+                                    }
+                                }
                             }
                         }
                     }
