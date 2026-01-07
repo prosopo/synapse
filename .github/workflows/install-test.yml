@@ -34,17 +34,21 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: fedora:latest
-      options: --privileged -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /tmp
+      options: --privileged -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run:exec
     steps:
       - name: Install dependencies
         run: |
           dnf install -y systemd git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
 
       - name: Building package
-        run: ./builder.sh
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          ./builder.sh
         working-directory: ./pkg/rpm
 
       - name: Installing package

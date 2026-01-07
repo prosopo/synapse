@@ -26,7 +26,9 @@ kernel level and can operate in reverse proxy mode or firewall-only mode.
 
 %prep
 %setup -q
-curl https://sh.rustup.rs -sSf | sh -s -- -y
+if ! command -v cargo &> /dev/null; then
+    curl https://sh.rustup.rs -sSf | sh -s -- -y
+fi
 
 # -----------------------------------------------------------------------------
 
