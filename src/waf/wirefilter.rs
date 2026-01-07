@@ -758,6 +758,37 @@ pub fn update_http_filter_from_config_value(config: &Config) -> anyhow::Result<(
     }
 }
 
+/// Load WAF rules from a Vec of WafRule (for local mode)
+pub async fn load_waf_rules(waf_rules: Vec<crate::worker::config::WafRule>) -> anyhow::Result<()> {
+    // Create a minimal config with just WAF rules
+    let config = crate::worker::config::Config {
+        access_rules: crate::worker::config::AccessRule {
+            id: "local".to_string(),
+            name: "Local Rules".to_string(),
+            description: "Local security rules".to_string(),
+            allow: crate::worker::config::RuleSet {
+                asn: vec![],
+                country: vec![],
+                ips: vec![],
+            },
+            block: crate::worker::config::RuleSet {
+                asn: vec![],
+                country: vec![],
+                ips: vec![],
+            },
+        },
+        waf_rules: crate::worker::config::WafRules { rules: waf_rules },
+        content_scanning: crate::content_scanning::ContentScanningConfig::default(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        last_modified: chrono::Utc::now().to_rfc3339(),
+    };
+    
+    let filter = HttpFilter::new_from_config(&config)?;
+    set_global_http_filter(filter)?;
+    Ok(())
+}
+
 /// Evaluate WAF rules for a Pingora request
 /// This is a convenience function that converts Pingora's RequestHeader to hyper's Parts
 pub async fn evaluate_waf_for_pingora_request(

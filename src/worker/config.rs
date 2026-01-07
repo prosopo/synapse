@@ -249,17 +249,29 @@ pub struct ConfigWorker {
     api_key: String,
     refresh_interval_secs: u64,
     skels: Vec<Arc<crate::bpf::FilterSkel<'static>>>,
+    security_rules_config_path: std::path::PathBuf,
 }
 
 impl ConfigWorker {
-    pub fn new(base_url: String, api_key: String, refresh_interval_secs: u64, skels: Vec<Arc<crate::bpf::FilterSkel<'static>>>) -> Self {
+    pub fn new(base_url: String, api_key: String, refresh_interval_secs: u64, skels: Vec<Arc<crate::bpf::FilterSkel<'static>>>, security_rules_config_path: std::path::PathBuf) -> Self {
         Self {
             base_url,
             api_key,
             refresh_interval_secs,
             skels,
+            security_rules_config_path,
         }
     }
+}
+
+/// Load configuration from a local YAML file
+pub async fn load_config_from_file(path: &std::path::PathBuf) -> Result<ConfigApiResponse, Box<dyn std::error::Error>> {
+    use anyhow::Context;
+    let content = tokio::fs::read_to_string(path).await
+        .with_context(|| format!("Failed to read security rules file: {:?}", path))?;
+    let config: Config = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse security rules YAML from file: {:?}", path))?;
+    Ok(ConfigApiResponse { success: true, config })
 }
 
 impl Worker for ConfigWorker {
@@ -272,61 +284,103 @@ impl Worker for ConfigWorker {
         let api_key = self.api_key.clone();
         let refresh_interval_secs = self.refresh_interval_secs;
         let skels = self.skels.clone();
+        let security_rules_config_path = self.security_rules_config_path.clone();
         let worker_name = self.name().to_string();
 
         tokio::spawn(async move {
-            // Initial fetch on startup
-            log::info!("[{}] Starting initial config fetch from API...", worker_name);
-            match fetch_config(base_url.clone(), api_key.clone()).await {
-                Ok(config_response) => {
-                    log::info!("[{}] Successfully fetched initial config (access_rules: {}, waf_rules: {})",
-                        worker_name,
-                        config_response.config.access_rules.allow.ips.len() + config_response.config.access_rules.block.ips.len(),
-                        config_response.config.waf_rules.rules.len()
-                    );
+            // Check if running in local mode (no API key)
+            if api_key.is_empty() {
+                // LOCAL MODE: Load config from file once at startup
+                log::info!("[{}] No API key provided, loading config from local file...", worker_name);
+                match load_config_from_file(&security_rules_config_path).await {
+                    Ok(config_response) => {
+                        log::info!("[{}] Successfully loaded config from local file (access_rules: {}, waf_rules: {})",
+                            worker_name,
+                            config_response.config.access_rules.allow.ips.len() + config_response.config.access_rules.block.ips.len(),
+                            config_response.config.waf_rules.rules.len()
+                        );
 
-                    // Apply rules to BPF maps after fetching config
-                    if !skels.is_empty() {
-                        if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&skels) {
-                            log::error!("[{}] Failed to apply rules from initial config: {}", worker_name, e);
+                        // Apply rules to BPF maps
+                        if !skels.is_empty() {
+                            if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&skels) {
+                                log::error!("[{}] Failed to apply rules from local config: {}", worker_name, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[{}] Failed to load config from local file: {}", worker_name, e);
+                    }
+                }
+
+                // In local mode, don't set up periodic updates - just wait for shutdown
+                log::info!("[{}] Running in local config mode - periodic updates disabled", worker_name);
+                log::info!("[{}] To update rules, modify {} and restart the application", worker_name, security_rules_config_path.display());
+                
+                // Wait for shutdown signal
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => {
+                            if *shutdown.borrow() {
+                                break;
+                            }
                         }
                     }
                 }
-                Err(e) => {
-                    log::warn!("[{}] Failed to fetch initial config from API: {}", worker_name, e);
-                    log::warn!("[{}] Will retry on next scheduled interval", worker_name);
-                }
-            }
+            } else {
+                // API MODE: Fetch from API periodically
+                // Initial fetch on startup
+                log::info!("[{}] Starting initial config fetch from API...", worker_name);
+                match fetch_config(base_url.clone(), api_key.clone()).await {
+                    Ok(config_response) => {
+                        log::info!("[{}] Successfully fetched initial config (access_rules: {}, waf_rules: {})",
+                            worker_name,
+                            config_response.config.access_rules.allow.ips.len() + config_response.config.access_rules.block.ips.len(),
+                            config_response.config.waf_rules.rules.len()
+                        );
 
-            // Set up periodic refresh interval
-            let mut interval = interval(Duration::from_secs(refresh_interval_secs));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
-            loop {
-                tokio::select! {
-                    _ = shutdown.changed() => {
-                        if *shutdown.borrow() {
-                            break;
+                        // Apply rules to BPF maps after fetching config
+                        if !skels.is_empty() {
+                            if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&skels) {
+                                log::error!("[{}] Failed to apply rules from initial config: {}", worker_name, e);
+                            }
                         }
                     }
-                    _ = interval.tick() => {
-                        log::debug!("[{}] Periodic config refresh triggered", worker_name);
-                        match fetch_config(base_url.clone(), api_key.clone()).await {
-                            Ok(config_response) => {
-                                log::debug!("[{}] Config refreshed successfully (waf_rules: {})",
-                                    worker_name,
-                                    config_response.config.waf_rules.rules.len()
-                                );
+                    Err(e) => {
+                        log::warn!("[{}] Failed to fetch initial config from API: {}", worker_name, e);
+                        log::warn!("[{}] Will retry on next scheduled interval", worker_name);
+                    }
+                }
 
-                                // Apply rules to BPF maps after fetching config
-                                if !skels.is_empty() {
-                                    if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&skels) {
-                                        log::error!("[{}] Failed to apply rules from config: {}", worker_name, e);
+                // Set up periodic refresh interval
+                let mut interval = interval(Duration::from_secs(refresh_interval_secs));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => {
+                            if *shutdown.borrow() {
+                                break;
+                            }
+                        }
+                        _ = interval.tick() => {
+                            log::debug!("[{}] Periodic config refresh triggered", worker_name);
+                            match fetch_config(base_url.clone(), api_key.clone()).await {
+                                Ok(config_response) => {
+                                    log::debug!("[{}] Config refreshed successfully (waf_rules: {})",
+                                        worker_name,
+                                        config_response.config.waf_rules.rules.len()
+                                    );
+
+                                    // Apply rules to BPF maps after fetching config
+                                    if !skels.is_empty() {
+                                        if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&skels) {
+                                            log::error!("[{}] Failed to apply rules from config: {}", worker_name, e);
+                                        }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                log::warn!("[{}] Failed to fetch config from API: {}", worker_name, e);
+                                Err(e) => {
+                                    log::warn!("[{}] Failed to fetch config from API: {}", worker_name, e);
+                                }
                             }
                         }
                     }

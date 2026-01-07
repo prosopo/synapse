@@ -99,14 +99,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Validate required arguments when no config file is provided
-    if args.config.is_none() {
-        if args.arxignis_api_key.is_none() {
-            return Err(anyhow::anyhow!(
-                "--arxignis-api-key is required when no config file is provided"
-            ));
-        }
-    }
+    // API key is optional - allow running in local mode without it
 
     // Load configuration
     let config = Config::load_from_args(&args)
@@ -195,7 +188,7 @@ fn main() -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn async_main(_args: Args, config: Config) -> Result<()> {
+async fn async_main(args: Args, config: Config) -> Result<()> {
 
     if config.daemon.enabled {
         log::info!("Running in daemon mode (PID file: {})", config.daemon.pid_file);
@@ -453,7 +446,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
     // Register certificate worker only if Redis was successfully initialized
     if redis_initialized {
         // Parse proxy_certificates from config file (under pingora section)
-        let certificate_path = if let Some(config_path) = &_args.config {
+        let certificate_path = if let Some(config_path) = &args.config {
             std::fs::read_to_string(config_path)
                 .ok()
                 .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
@@ -555,8 +548,27 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                    config.arxignis.log_sending_enabled, !config.arxignis.api_key.is_empty());
     }
 
+    // Determine if we have API key for full functionality
+    let has_api_key = !config.arxignis.api_key.is_empty();
+
+    // Display local mode banner if no API key
+    if !has_api_key {
+        log::warn!("════════════════════════════════════════════════════════════════");
+        log::warn!("  Gen0Sec API key not provided - Running in LOCAL MODE");
+        log::warn!("════════════════════════════════════════════════════════════════");
+        log::warn!("  ✓ Available: Reverse proxy, TLS, content scanning, CAPTCHA");
+        log::warn!("  ✓ Available: Static access rules and WAF rules from local file");
+        log::warn!("  ✗ Unavailable: Threat intelligence (IP reputation, geo, ASN)");
+        log::warn!("  ✗ Unavailable: Dynamic rule updates (requires app restart)");
+        log::warn!("  ✗ Unavailable: Centralized event logging and analytics");
+        log::warn!("════════════════════════════════════════════════════════════════");
+        log::warn!("  To enable full features, set arxignis_api_key in config");
+        log::warn!("  or use --arxignis-api-key CLI argument");
+        log::warn!("════════════════════════════════════════════════════════════════");
+    }
+
     // Build list of interfaces to attach
-    if !config.arxignis.base_url.is_empty() && !config.arxignis.api_key.is_empty() {
+    if has_api_key && !config.arxignis.base_url.is_empty() {
         if let Err(e) = init_config(
             config.arxignis.base_url.clone(),
             config.arxignis.api_key.clone(),
@@ -722,13 +734,50 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             );
         }
     } else {
-        log::warn!("No API credentials provided, HTTP filter will not be initialized");
+        // LOCAL MODE: Load security rules from local file
+        log::info!("Loading security rules from local file: {}", args.security_rules_config.display());
+        
+        let security_rules_path = args.security_rules_config.clone();
+        
+        // Load and initialize WAF from local file
+        match worker::config::load_config_from_file(&security_rules_path).await {
+            Ok(config_response) => {
+                let num_access_ips = config_response.config.access_rules.block.ips.len();
+                let num_waf_rules = config_response.config.waf_rules.rules.len();
+                log::info!("Loaded {} access rule IPs and {} WAF rules from local file", num_access_ips, num_waf_rules);
+                
+                // Store config globally for access rules
+                worker::config::set_global_config(config_response.config.clone());
+                
+                // Initialize WAF with local rules
+                if let Err(e) = crate::waf::wirefilter::load_waf_rules(config_response.config.waf_rules.rules).await {
+                    log::warn!("Failed to load WAF rules from local file: {}", e);
+                } else {
+                    log::info!("HTTP filter initialized from local file with {} WAF rules", num_waf_rules);
+                }
+                
+                // Update access rules in XDP if available
+                if !state.skels.is_empty() {
+                    if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&state.skels) {
+                        log::warn!("Failed to apply access rules from local file to XDP: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to load security rules from local file: {}", e);
+                log::error!("HTTP filter will not be initialized. Please check security_rules.yaml");
+            }
+        }
+        
+        // Threat intelligence not available in local mode
+        log::info!("Threat intelligence client NOT initialized (API key not provided)");
+        log::info!("WAF rules using threat.* or ip.src.country fields will not work");
     }
 
     // Access rules were already initialized after XDP attachment above
 
     // Register config worker to fetch and apply configuration periodically
-    if !config.arxignis.base_url.is_empty() && !config.arxignis.api_key.is_empty() {
+    if has_api_key && !config.arxignis.base_url.is_empty() {
         let refresh_interval = 10; // 10 seconds config refresh interval
         let worker_config = worker::WorkerConfig {
             name: "config".to_string(),
@@ -741,6 +790,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             config.arxignis.api_key.clone(),
             refresh_interval,
             state.skels.clone(),
+            args.security_rules_config.clone(),
         );
 
         if let Err(e) = worker_manager.register_worker(worker_config, config_worker) {
@@ -753,7 +803,27 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             }
         }
     } else {
-        log::info!("Skipping config worker (no API credentials provided)");
+        // In local mode, register config worker that loads from file at startup only
+        let refresh_interval = 10;
+        let worker_config = worker::WorkerConfig {
+            name: "config".to_string(),
+            interval_secs: refresh_interval,
+            enabled: true,
+        };
+
+        let config_worker = worker::config::ConfigWorker::new(
+            String::new(),
+            String::new(),
+            refresh_interval,
+            state.skels.clone(),
+            args.security_rules_config.clone(),
+        );
+
+        if let Err(e) = worker_manager.register_worker(worker_config, config_worker) {
+            log::error!("Failed to register config worker: {}", e);
+        } else {
+            log::info!("Registered config worker (local mode) - loads from file at startup only");
+        }
     }
 
     // Start the old Pingora proxy system in a separate thread (non-blocking)

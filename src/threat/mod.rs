@@ -563,9 +563,13 @@ pub async fn refresh_geoip_city_mmdb() -> Result<()> {
 
 /// Get threat intelligence for an IP address
 pub async fn get_threat_intel(ip: &str) -> Result<Option<ThreatResponse>> {
-    let client = THREAT_CLIENT
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+    let client = match THREAT_CLIENT.get() {
+        Some(c) => c,
+        None => {
+            log::trace!("Threat client not initialized (API key not provided), skipping threat intel lookup for {}", ip);
+            return Ok(None);
+        }
+    };
 
     client.get_threat_intel(ip).await
 }
@@ -580,9 +584,13 @@ pub fn get_version_cache() -> Result<Arc<MemoryCache<String, String>>> {
 
 /// Get WAF fields for an IP address
 pub async fn get_waf_fields(ip: &str) -> Result<Option<WafFields>> {
-    let client = THREAT_CLIENT
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("Threat client not initialized"))?;
+    let client = match THREAT_CLIENT.get() {
+        Some(c) => c,
+        None => {
+            log::trace!("Threat client not initialized (API key not provided), skipping WAF fields lookup for {}", ip);
+            return Ok(None);
+        }
+    };
 
     client.get_waf_fields(ip).await
 }
