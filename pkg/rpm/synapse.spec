@@ -1,5 +1,7 @@
 # Copyright (C) 2025, Gen0Sec.
 
+%global debug_package %{nil}
+
 Summary:     High-performance reverse proxy and firewall
 Name:        synapse
 Version:     %{_version}
