@@ -265,8 +265,58 @@ jobs:
           path: /tmp/${{ env.VERSION }}/synapse*.deb
           retention-days: 5
 
+  package-build-rpm-x86_64:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Build Docker image
+        run: docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile.x86_64 pkg/rpm/docker/
+
+      - name: Package build
+        run: |
+          mkdir -p /tmp/${{ env.VERSION }}
+          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ env.VERSION }}:/tmp/output --rm synapse-builder-rpm:latest ${{ env.VERSION }}
+
+      - name: Archive output package
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-${{ env.VERSION }}.x86_64.rpm
+          path: /tmp/${{ env.VERSION }}/synapse*.rpm
+          retention-days: 5
+
+  package-build-rpm-aarch64:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Build Docker image
+        run: docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile.aarch64 pkg/rpm/docker/
+
+      - name: Package build
+        run: |
+          mkdir -p /tmp/${{ env.VERSION }}
+          docker run -v ${{ github.workspace }}:/tmp/repo -v /tmp/${{ env.VERSION }}:/tmp/output --rm synapse-builder-rpm:latest ${{ env.VERSION }}
+
+      - name: Archive output package
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-${{ env.VERSION }}.aarch64.rpm
+          path: /tmp/${{ env.VERSION }}/synapse*.rpm
+          retention-days: 5
+
   publish-artifacts:
-      needs: [ package-build-amd64, package-build-arm64, build-artifacts ]
+      needs: [ package-build-amd64, package-build-arm64, package-build-rpm-x86_64, package-build-rpm-aarch64, build-artifacts ]
       runs-on: ubuntu-latest
 
       steps:
