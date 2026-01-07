@@ -6,7 +6,7 @@ set -ex
 
 brand="synapse"
 current_dir=$(pwd)
-architecture=$(uname -i)
+architecture=$(uname -m)
 rpmbuild="/usr/bin/rpmbuild"
 version="$(grep -m1 'version' ../../Cargo.toml | cut -d' ' -f3 | tr -d '"')"
 bin_path="/usr/bin"
