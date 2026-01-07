@@ -30,16 +30,15 @@ jobs:
         run: sudo dpkg --purge synapse
 
 
-  Build-install-rocky:
+  Build-install-fedora:
     runs-on: ubuntu-latest
     container:
-      image: rockylinux:9
-      options: --privileged
+      image: fedora:latest
+      options: --privileged -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /tmp
     steps:
       - name: Install dependencies
         run: |
-          yum install -y systemd git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd --allowerasing
-          systemctl --version || true
+          dnf install -y systemd git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd
 
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
@@ -49,7 +48,7 @@ jobs:
         working-directory: ./pkg/rpm
 
       - name: Installing package
-        run: yum install -y ./synapse*.rpm
+        run: dnf install -y ./synapse*.rpm
         working-directory: ./pkg/rpm
 
       - name: Start Synapse service
@@ -60,4 +59,4 @@ jobs:
 
       - name: Remove package installation
         if: always()
-        run: yum remove -y synapse
+        run: dnf remove -y synapse || true
