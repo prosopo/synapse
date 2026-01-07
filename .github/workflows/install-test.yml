@@ -34,10 +34,12 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: rockylinux:9
+      options: --privileged
     steps:
       - name: Install dependencies
         run: |
-          yum install -y git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd --allowerasing
+          yum install -y systemd git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd --allowerasing
+          systemctl --version || true
 
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
