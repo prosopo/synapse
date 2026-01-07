@@ -106,13 +106,20 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec synapse-rpm-test systemctl start synapse
+          docker exec synapse-rpm-test systemctl daemon-reload
+          docker exec synapse-rpm-test systemctl start synapse || {
+            echo "=== Service failed to start, checking logs ==="
+            docker exec synapse-rpm-test systemctl status synapse --no-pager || true
+            docker exec synapse-rpm-test journalctl -xeu synapse --no-pager || true
+            exit 1
+          }
 
       - name: Check Synapse running
         shell: bash
         run: |
           set -euxo pipefail
           docker exec synapse-rpm-test systemctl status synapse --no-pager
+          docker exec synapse-rpm-test journalctl -xeu synapse --no-pager -n 20 || true
 
       - name: Remove package installation
         if: always()
