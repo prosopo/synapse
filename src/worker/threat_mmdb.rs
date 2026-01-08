@@ -147,7 +147,7 @@ async fn sync_mmdb(
 ) -> Result<Option<String>> {
     // Construct version API URL from base URL
     let base = mmdb_base_url.trim_end_matches('/');
-    let versions_url = format!("{}/v1/indicators/version", base);
+    let versions_url = format!("{}/indicators/version", base);
 
     // Check L1 cache first using pingora-memory-cache
     let cache = threat::get_version_cache()
@@ -222,11 +222,16 @@ async fn sync_mmdb(
         }
     }
 
-    let local_path = mmdb_path.ok_or_else(|| anyhow!("MMDB path not configured for Threat MMDB worker"))?;
+    let mut local_path = mmdb_path.ok_or_else(|| anyhow!("MMDB path not configured for Threat MMDB worker"))?;
+
+    // If the path doesn't have a file extension, treat it as a directory and append the filename
+    if local_path.extension().is_none() {
+        local_path = local_path.join("threat.mmdb");
+    }
 
     let base = mmdb_base_url.trim_end_matches('/');
     let bytes = if base.starts_with("http://") || base.starts_with("https://") {
-        let url = format!("{}/v1/indicators/download?version={}", base, latest);
+        let url = format!("{}/indicators/download?version={}", base, latest);
         download_mmdb(&url, headers.as_ref()).await?
     } else {
         // Strip file:// prefix if present

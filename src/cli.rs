@@ -138,18 +138,9 @@ pub struct Gen0SecConfig {
     pub api_key: String,
     #[serde(default = "default_base_url")]
     pub base_url: String,
-    /// Base URL for threat-intel MMDB files (version.txt and MMDB files are at this base URL)
+    /// Threat MMDB database configuration
     #[serde(default)]
-    pub threat_mmdb_url: String,
-    /// Optional local path to store/read the threat MMDB file
-    #[serde(default)]
-    pub threat_mmdb_path: Option<PathBuf>,
-    /// How often to refresh the threat MMDB from the remote URL (seconds). Default: 300 (5 minutes)
-    #[serde(default = "default_threat_mmdb_refresh_secs")]
-    pub threat_mmdb_refresh_secs: u64,
-    /// Optional custom headers to add to Threat MMDB download requests
-    #[serde(default)]
-    pub threat_mmdb_headers: Option<std::collections::HashMap<String, String>>,
+    pub threat: GeoipDatabaseConfig,
     #[serde(default = "default_log_sending_enabled")]
     pub log_sending_enabled: bool,
     #[serde(default = "default_include_response_body")]
@@ -164,9 +155,6 @@ fn default_base_url() -> String {
     "https://api.gen0sec.com/v1".to_string()
 }
 
-fn default_threat_mmdb_refresh_secs() -> u64 {
-    300 // 5 minutes
-}
 
 
 fn default_log_sending_enabled() -> bool {
@@ -192,6 +180,9 @@ pub struct GeoipDatabaseConfig {
     /// Optional custom headers to add to download requests
     #[serde(default)]
     pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Refresh interval in seconds (optional, overrides parent refresh_secs if set)
+    #[serde(default)]
+    pub refresh_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -281,10 +272,7 @@ impl Config {
             arxignis: Gen0SecConfig {
                 api_key: "".to_string(),
                 base_url: "https://api.gen0sec.com/v1".to_string(),
-                threat_mmdb_url: "".to_string(),
-                threat_mmdb_path: None,
-                threat_mmdb_refresh_secs: 300,
-                threat_mmdb_headers: None,
+                threat: GeoipDatabaseConfig::default(),
                 log_sending_enabled: true,
                 include_response_body: true,
                 max_body_size: 1024 * 1024, // 1MB
@@ -302,16 +290,19 @@ impl Config {
                     url: "".to_string(),
                     path: None,
                     headers: None,
+                    refresh_secs: None,
                 },
                 asn: GeoipDatabaseConfig {
                     url: "".to_string(),
                     path: None,
                     headers: None,
+                    refresh_secs: None,
                 },
                 city: GeoipDatabaseConfig {
                     url: "".to_string(),
                     path: None,
                     headers: None,
+                    refresh_secs: None,
                 },
                 refresh_secs: 28800,
             },

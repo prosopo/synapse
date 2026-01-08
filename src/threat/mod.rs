@@ -3,6 +3,8 @@ use std::{net::IpAddr, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use maxminddb::{geoip2, MaxMindDBError, Reader};
+use memmap2::MmapOptions;
+use std::fs::File;
 use pingora_memory_cache::MemoryCache;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::{OnceCell, RwLock};
@@ -102,10 +104,10 @@ pub struct ThreatClient {
     geoip_country_path: Option<PathBuf>,
     geoip_asn_path: Option<PathBuf>,
     geoip_city_path: Option<PathBuf>,
-    threat_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
-    geoip_country_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
-    geoip_asn_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
-    geoip_city_reader: RwLock<Option<Arc<Reader<Vec<u8>>>>>,
+    threat_reader: RwLock<Option<Arc<Reader<memmap2::Mmap>>>>,
+    geoip_country_reader: RwLock<Option<Arc<Reader<memmap2::Mmap>>>>,
+    geoip_asn_reader: RwLock<Option<Arc<Reader<memmap2::Mmap>>>>,
+    geoip_city_reader: RwLock<Option<Arc<Reader<memmap2::Mmap>>>>,
     pingora_cache: Arc<MemoryCache<String, ThreatResponse>>,
 }
 
@@ -195,100 +197,164 @@ impl ThreatClient {
     }
 
 
-    /// Read the MMDB from the configured local path and keep it in memory
-    async fn refresh_threat_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
-        let path = self
+    /// Open the MMDB from the configured local path using memory-mapped file access
+    async fn refresh_threat_reader(&self) -> Result<Arc<Reader<memmap2::Mmap>>> {
+        let mut path = self
             .threat_mmdb_path
             .clone()
             .ok_or_else(|| anyhow!("Threat MMDB path not configured"))?;
 
-        let data = tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("Failed to read Threat MMDB from {:?}", path))?;
+        // If the path doesn't have a file extension, treat it as a directory and append the filename
+        if path.extension().is_none() {
+            path = path.join("threat.mmdb");
+        }
 
-        let reader = Reader::from_source(data)
-            .context("Failed to parse Threat MMDB data")?;
+        // Use spawn_blocking since file operations are blocking
+        let reader = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || -> Result<Reader<memmap2::Mmap>> {
+                let file = File::open(&path)
+                    .with_context(|| format!("Failed to open Threat MMDB file {:?}", path))?;
+                let mmap = unsafe {
+                    MmapOptions::new()
+                        .map(&file)
+                        .with_context(|| format!("Failed to memory-map Threat MMDB from {:?}", path))?
+                };
+                Reader::from_source(mmap)
+                    .with_context(|| format!("Failed to parse Threat MMDB from {:?}", path))
+            }
+        })
+        .await
+        .context("Failed to spawn blocking task for MMDB open")??;
 
         let arc = Arc::new(reader);
 
         let mut guard = self.threat_reader.write().await;
         *guard = Some(arc.clone());
 
-        log::info!("Threat MMDB loaded from {:?}", path);
+        log::info!("Threat MMDB opened (memory-mapped) from {:?}", path);
 
         Ok(arc)
     }
 
-    async fn refresh_geoip_country_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
-        let path = self
+    async fn refresh_geoip_country_reader(&self) -> Result<Arc<Reader<memmap2::Mmap>>> {
+        let mut path = self
             .geoip_country_path
             .clone()
             .ok_or_else(|| anyhow!("GeoIP Country MMDB path not configured"))?;
 
-        let data = tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("Failed to read GeoIP Country MMDB from {:?}", path))?;
+        // If the path doesn't have a file extension, treat it as a directory and append the filename
+        if path.extension().is_none() {
+            path = path.join("GeoLite2-Country.mmdb");
+        }
 
-        let reader = Reader::from_source(data)
-            .context("Failed to parse GeoIP Country MMDB data")?;
+        // Use spawn_blocking since file operations are blocking
+        let reader = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || -> Result<Reader<memmap2::Mmap>> {
+                let file = File::open(&path)
+                    .with_context(|| format!("Failed to open GeoIP Country MMDB file {:?}", path))?;
+                let mmap = unsafe {
+                    MmapOptions::new()
+                        .map(&file)
+                        .with_context(|| format!("Failed to memory-map GeoIP Country MMDB from {:?}", path))?
+                };
+                Reader::from_source(mmap)
+                    .with_context(|| format!("Failed to parse GeoIP Country MMDB from {:?}", path))
+            }
+        })
+        .await
+        .context("Failed to spawn blocking task for MMDB open")??;
 
         let arc = Arc::new(reader);
 
         let mut guard = self.geoip_country_reader.write().await;
         *guard = Some(arc.clone());
 
-        log::info!("GeoIP Country MMDB loaded from {:?}", path);
+        log::info!("GeoIP Country MMDB opened (memory-mapped) from {:?}", path);
 
         Ok(arc)
     }
 
-    async fn refresh_geoip_asn_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
-        let path = self
+    async fn refresh_geoip_asn_reader(&self) -> Result<Arc<Reader<memmap2::Mmap>>> {
+        let mut path = self
             .geoip_asn_path
             .clone()
             .ok_or_else(|| anyhow!("GeoIP ASN MMDB path not configured"))?;
 
-        let data = tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("Failed to read GeoIP ASN MMDB from {:?}", path))?;
+        // If the path doesn't have a file extension, treat it as a directory and append the filename
+        if path.extension().is_none() {
+            path = path.join("GeoLite2-ASN.mmdb");
+        }
 
-        let reader = Reader::from_source(data)
-            .context("Failed to parse GeoIP ASN MMDB data")?;
+        // Use spawn_blocking since file operations are blocking
+        let reader = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || -> Result<Reader<memmap2::Mmap>> {
+                let file = File::open(&path)
+                    .with_context(|| format!("Failed to open GeoIP ASN MMDB file {:?}", path))?;
+                let mmap = unsafe {
+                    MmapOptions::new()
+                        .map(&file)
+                        .with_context(|| format!("Failed to memory-map GeoIP ASN MMDB from {:?}", path))?
+                };
+                Reader::from_source(mmap)
+                    .with_context(|| format!("Failed to parse GeoIP ASN MMDB from {:?}", path))
+            }
+        })
+        .await
+        .context("Failed to spawn blocking task for MMDB open")??;
 
         let arc = Arc::new(reader);
 
         let mut guard = self.geoip_asn_reader.write().await;
         *guard = Some(arc.clone());
 
-        log::info!("GeoIP ASN MMDB loaded from {:?}", path);
+        log::info!("GeoIP ASN MMDB opened (memory-mapped) from {:?}", path);
 
         Ok(arc)
     }
 
-    async fn refresh_geoip_city_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
-        let path = self
+    async fn refresh_geoip_city_reader(&self) -> Result<Arc<Reader<memmap2::Mmap>>> {
+        let mut path = self
             .geoip_city_path
             .clone()
             .ok_or_else(|| anyhow!("GeoIP City MMDB path not configured"))?;
 
-        let data = tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("Failed to read GeoIP City MMDB from {:?}", path))?;
+        // If the path doesn't have a file extension, treat it as a directory and append the filename
+        if path.extension().is_none() {
+            path = path.join("GeoLite2-City.mmdb");
+        }
 
-        let reader = Reader::from_source(data)
-            .context("Failed to parse GeoIP City MMDB data")?;
+        // Use spawn_blocking since file operations are blocking
+        let reader = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || -> Result<Reader<memmap2::Mmap>> {
+                let file = File::open(&path)
+                    .with_context(|| format!("Failed to open GeoIP City MMDB file {:?}", path))?;
+                let mmap = unsafe {
+                    MmapOptions::new()
+                        .map(&file)
+                        .with_context(|| format!("Failed to memory-map GeoIP City MMDB from {:?}", path))?
+                };
+                Reader::from_source(mmap)
+                    .with_context(|| format!("Failed to parse GeoIP City MMDB from {:?}", path))
+            }
+        })
+        .await
+        .context("Failed to spawn blocking task for MMDB open")??;
 
         let arc = Arc::new(reader);
 
         let mut guard = self.geoip_city_reader.write().await;
         *guard = Some(arc.clone());
 
-        log::info!("GeoIP City MMDB loaded from {:?}", path);
+        log::info!("GeoIP City MMDB opened (memory-mapped) from {:?}", path);
 
         Ok(arc)
     }
 
-    async fn ensure_geoip_country_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+    async fn ensure_geoip_country_reader(&self) -> Result<Arc<Reader<memmap2::Mmap>>> {
         {
             let guard = self.geoip_country_reader.read().await;
             if let Some(existing) = guard.as_ref() {
@@ -298,7 +364,7 @@ impl ThreatClient {
         self.refresh_geoip_country_reader().await
     }
 
-    async fn ensure_geoip_asn_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+    async fn ensure_geoip_asn_reader(&self) -> Result<Arc<Reader<memmap2::Mmap>>> {
         {
             let guard = self.geoip_asn_reader.read().await;
             if let Some(existing) = guard.as_ref() {
@@ -308,7 +374,7 @@ impl ThreatClient {
         self.refresh_geoip_asn_reader().await
     }
 
-    async fn ensure_geoip_city_reader(&self) -> Result<Arc<Reader<Vec<u8>>>> {
+    async fn ensure_geoip_city_reader(&self) -> Result<Arc<Reader<memmap2::Mmap>>> {
         {
             let guard = self.geoip_city_reader.read().await;
             if let Some(existing) = guard.as_ref() {
