@@ -1,4 +1,4 @@
-name: Install test
+name: Synapse Build
 on:
   pull_request:
     branches:
@@ -30,33 +30,101 @@ jobs:
         run: sudo dpkg --purge synapse
 
 
-  # Build-install-centos:
-  #   runs-on:
-  #     group: centos7
-  #   env:
-  #     repodir: ${{ github.workspace }}/${{ github.run_id }}
-  #   steps:
-  #     - name: Check out repository code, branch='${{ github.ref }}'
-  #       run: git clone https://github.com/${{ github.repository }}.git -b ${{ github.ref_name }} $repodir
+  Build-install-fedora:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code, branch='${{ github.ref }}'
+        uses: actions/checkout@v4
 
-  #     - name: Building package
-  #       run: sudo ./builder.sh
-  #       working-directory: ${{ github.run_id }}/pkg/rpm
+      - name: Build systemd-enabled Fedora image
+        shell: bash
+        run: |
+          set -euxo pipefail
+          
+          # Create a Dockerfile for systemd-enabled Fedora
+          cat > /tmp/Dockerfile.fedora-systemd << 'EOF'
+          FROM fedora:latest
+          RUN dnf install -y systemd systemd-libs && dnf clean all
+          CMD ["/usr/lib/systemd/systemd"]
+          EOF
+          
+          docker build -t fedora-systemd -f /tmp/Dockerfile.fedora-systemd /tmp
 
-  #     - name: Installing package
-  #       run: sudo yum install -y ./synapse*.rpm
-  #       working-directory: ${{ github.run_id }}/pkg/rpm
+      - name: Start Fedora systemd container (PID 1) + install deps
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-  #     - name: Start Synapse service
-  #       run: sudo systemctl start synapse
+          # Start systemd as PID 1 
+          docker run -d --name synapse-rpm-test \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            --tmpfs /run \
+            --tmpfs /run/lock \
+            --tmpfs /tmp:exec \
+            -v "${GITHUB_WORKSPACE}:/workspace:rw" \
+            -w /workspace \
+            fedora-systemd
 
-  #     - name: Check Synapse running
-  #       run: sudo systemctl status synapse
+          # Wait for systemd to come up
+          sleep 5
+          for i in {1..30}; do
+            if docker exec synapse-rpm-test systemctl is-system-running --wait >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec synapse-rpm-test systemctl is-system-running || true
 
-  #     - name: Remove package installation
-  #       if: always()
-  #       run: sudo yum remove -y synapse
+          # Install build/runtime deps inside the RPM OS
+          docker exec synapse-rpm-test bash -lc '
+            dnf install -y git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          '
 
-  #     - name: Remove repository
-  #       if: always()
-  #       run: sudo rm -rf $repodir
+      - name: Build RPM inside Fedora
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test bash -lc '
+            export PATH="$HOME/.cargo/bin:$PATH"
+            cd /workspace/pkg/rpm
+            ./builder.sh
+          '
+
+      - name: Install RPM inside Fedora
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test bash -lc '
+            cd /workspace/pkg/rpm
+            dnf install -y ./synapse*.rpm
+          '
+
+      - name: Start Synapse service
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test systemctl daemon-reload
+          docker exec synapse-rpm-test systemctl start synapse || {
+            echo "=== Service failed to start, checking logs ==="
+            docker exec synapse-rpm-test systemctl status synapse --no-pager || true
+            docker exec synapse-rpm-test journalctl -xeu synapse --no-pager || true
+            exit 1
+          }
+
+      - name: Check Synapse running
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec synapse-rpm-test systemctl status synapse --no-pager
+          docker exec synapse-rpm-test journalctl -xeu synapse --no-pager -n 20 || true
+
+      - name: Remove package installation
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker exec synapse-rpm-test dnf remove -y synapse
+          docker rm -f synapse-rpm-test
