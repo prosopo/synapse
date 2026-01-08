@@ -276,7 +276,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Build Docker image
-        run: docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile.x86_64 pkg/rpm/docker/
+        run: docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile pkg/rpm/docker/
 
       - name: Package build
         run: |
@@ -301,7 +301,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Build Docker image
-        run: docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile.aarch64 pkg/rpm/docker/
+        run: docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile pkg/rpm/docker/
 
       - name: Package build
         run: |
