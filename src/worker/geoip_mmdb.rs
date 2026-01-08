@@ -9,6 +9,7 @@ use tokio::time::{interval, Duration, MissedTickBehavior};
 use crate::http_client::get_global_reqwest_client;
 use crate::worker::Worker;
 
+#[derive(Clone)]
 pub enum GeoipDatabaseType {
     Country,
     Asn,
@@ -59,6 +60,7 @@ impl Worker for GeoipMmdbWorker {
         let versions_url = self.versions_url.clone();
         let mmdb_path = self.mmdb_path.clone();
         let headers = self.headers.clone();
+        let db_type_enum = self.db_type.clone();
         let db_type = match self.db_type {
             GeoipDatabaseType::Country => "country",
             GeoipDatabaseType::Asn => "asn",
@@ -81,6 +83,7 @@ impl Worker for GeoipMmdbWorker {
                 mmdb_path.clone(),
                 current_version.clone(),
                 headers.clone(),
+                db_type_enum.clone(),
             )
             .await
             {
@@ -126,6 +129,7 @@ impl Worker for GeoipMmdbWorker {
                             mmdb_path.clone(),
                             current_version.clone(),
                             headers.clone(),
+                            db_type_enum.clone(),
                         ).await {
                             Ok(new_ver) => {
                                 if new_ver != current_version {
@@ -177,8 +181,19 @@ async fn sync_mmdb(
     mmdb_path: Option<PathBuf>,
     current_version: Option<String>,
     headers: Option<HashMap<String, String>>,
+    db_type: GeoipDatabaseType,
 ) -> Result<Option<String>> {
-    let local_path = mmdb_path.ok_or_else(|| anyhow!("MMDB path not configured for GeoIP MMDB worker"))?;
+    let mut local_path = mmdb_path.ok_or_else(|| anyhow!("MMDB path not configured for GeoIP MMDB worker"))?;
+
+    // If the path doesn't have a file extension, treat it as a directory and append the filename
+    if local_path.extension().is_none() {
+        let filename = match db_type {
+            GeoipDatabaseType::Country => "GeoLite2-Country.mmdb",
+            GeoipDatabaseType::Asn => "GeoLite2-ASN.mmdb",
+            GeoipDatabaseType::City => "GeoLite2-City.mmdb",
+        };
+        local_path = local_path.join(filename);
+    }
 
     if versions_url.is_empty() {
         // Check if file already exists - if it does, skip download to avoid redundant writes
