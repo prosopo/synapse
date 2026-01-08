@@ -569,6 +569,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
         }
 
         // Initialize threat intelligence client (Threat MMDB → GeoIP MMDB fallback)
+        let has_threat = !config.arxignis.threat.url.is_empty() || config.arxignis.threat.path.is_some();
         let has_geoip = !config.geoip.country.url.is_empty()
             || !config.geoip.asn.url.is_empty()
             || !config.geoip.city.url.is_empty()
@@ -576,9 +577,9 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             || config.geoip.asn.path.is_some()
             || config.geoip.city.path.is_some();
 
-        if !config.arxignis.threat_mmdb_url.is_empty() || has_geoip {
+        if has_threat || has_geoip {
             if let Err(e) = threat::init_threat_client(
-                config.arxignis.threat_mmdb_path.clone(),
+                config.arxignis.threat.path.clone(),
                 config.geoip.country.path.clone(),
                 config.geoip.asn.path.clone(),
                 config.geoip.city.path.clone(),
@@ -590,11 +591,8 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                 log::info!("Threat intelligence client initialized");
 
                 // Register Threat MMDB refresh worker if configured
-                // Allow empty versions_url for direct MMDB download
-                if !config.arxignis.threat_mmdb_url.is_empty()
-                    && config.arxignis.threat_mmdb_refresh_secs > 0
-                {
-                    let refresh_interval = config.arxignis.threat_mmdb_refresh_secs;
+                let refresh_interval = config.arxignis.threat.refresh_secs.unwrap_or(300);
+                if !config.arxignis.threat.url.is_empty() && refresh_interval > 0 {
                     let worker_config = worker::WorkerConfig {
                         name: "threat_mmdb".to_string(),
                         interval_secs: refresh_interval,
@@ -602,9 +600,9 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                     };
                     let worker = worker::threat_mmdb::ThreatMmdbWorker::new(
                         refresh_interval,
-                        config.arxignis.threat_mmdb_url.clone(),
-                        config.arxignis.threat_mmdb_path.clone(),
-                        config.arxignis.threat_mmdb_headers.clone(),
+                        config.arxignis.threat.url.clone(),
+                        config.arxignis.threat.path.clone(),
+                        config.arxignis.threat.headers.clone(),
                         config.arxignis.api_key.clone(),
                     );
                     if let Err(e) = worker_manager.register_worker(worker_config, worker) {
