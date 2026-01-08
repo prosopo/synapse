@@ -33,7 +33,7 @@ redis:
   url: "redis://127.0.0.1/0"
 
   # Namespace prefix for Redis ACME cache entries
-  prefix: "ax:synapse"
+  prefix: "g0s:synapse"
 
   # Redis SSL/TLS configuration (optional)
   # ssl:
@@ -85,6 +85,22 @@ arxignis:
   # Maximum size for request/response bodies in access logs (bytes) - Don't override in Basic plan that's the maximum allowed by the plan.
   max_body_size: 1048576
 
+  # Threat MMDB Configuration
+  threat:
+    # URL to download Threat MMDB file
+    # Base URL for Threat MMDB files (version.txt and MMDB files are at this base URL)
+    # Example: https://download.gen0sec.com/v1 (will use https://download.gen0sec.com/v1/indicators/version)
+    url: "https://download.gen0sec.com/v1"
+    # Local path to Threat MMDB file (full path) or directory prefix
+    # Full path example: /var/lib/synapse/threat.mmdb
+    # Directory prefix example: /var/lib/synapse (will use threat.mmdb)
+    path: "/var/lib/synapse"
+    # Custom headers to add to Threat MMDB download requests (optional)
+    # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+    headers: null
+    # Threat MMDB refresh interval in seconds (default: 300 = 5 minutes)
+    refresh_secs: 300
+
   # Captcha Configuration
   captcha:
     # Captcha site key for security verification
@@ -104,6 +120,47 @@ arxignis:
 
     # Captcha validation cache TTL in seconds
     cache_ttl: 300
+
+# GeoIP MMDB Configuration
+geoip:
+  # Country database configuration
+  country:
+    # URL to download GeoIP Country MMDB file
+    url: ""
+    # Local path to GeoIP Country MMDB file (full path) or directory prefix
+    # Full path example: /var/cache/synapse/GeoLite2-Country.mmdb
+    # Directory prefix example: /var/lib/synapse (will use GeoLite2-Country.mmdb)
+    path: "/var/lib/synapse"
+    # Custom headers to add to download requests (optional)
+    # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+    headers: null
+
+  # ASN database configuration
+  asn:
+    # URL to download GeoIP ASN MMDB file
+    url: ""
+    # Local path to GeoIP ASN MMDB file (full path) or directory prefix
+    # Full path example: /var/cache/synapse/GeoLite2-ASN.mmdb
+    # Directory prefix example: /var/lib/synapse (will use GeoLite2-ASN.mmdb)
+    path: "/var/lib/synapse"
+    # Custom headers to add to download requests (optional)
+    # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+    headers: null
+
+  # City database configuration
+  city:
+    # URL to download GeoIP City MMDB file
+    url: ""
+    # Local path to GeoIP City MMDB file (full path) or directory prefix
+    # Full path example: /var/cache/synapse/GeoLite2-City.mmdb
+    # Directory prefix example: /var/lib/synapse (will use GeoLite2-City.mmdb)
+    path: "/var/lib/synapse"
+    # Custom headers to add to download requests (optional)
+    # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
+    headers: null
+
+  # GeoIP MMDB refresh interval in seconds (default: 28800 = 8 hours)
+  refresh_secs: 28800
 
 # Content Scanning
 content_scanning:
@@ -210,7 +267,7 @@ pingora:
   proxy_address_tls: "0.0.0.0:443"
 
   # Mandatory if proxy_address_tls is set (cert files: {NAME}.crt, {NAME}.key)
-  proxy_certificates: "/root/synapse/certs"
+  proxy_certificates: "/etc/synapse/certs"
 
   # TLS suite grade (high, medium, unsafe)
   proxy_tls_grade: "medium"
@@ -220,7 +277,7 @@ pingora:
   default_certificate: "default"
 
   # Path to upstreams configuration file
-  upstreams_conf: "/root/synapse/upstreams.yaml"
+  upstreams_conf: "/etc/synapse/upstreams.yaml"
 
   # HTTP API address for remote config updates
   config_address: "0.0.0.0:3000"
@@ -251,7 +308,7 @@ pingora:
 # ACME Configuration (Let's Encrypt certificate management)
 acme:
   # Enable embedded ACME server for automatic certificate management
-  enabled: false
+  enabled: true
 
   # Port for ACME server (for HTTP-01 challenges)
   # The server always binds to 127.0.0.1 (localhost only) for security

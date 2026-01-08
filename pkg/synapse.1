@@ -1,0 +1,85 @@
+.\" **************************************************************************
+.\"    _________
+.\"  /   _____/__.__._____    ____ ______  ______ ____
+.\"  \_____  <   |  |\__  \  /    \\____ \/  ___// __ \
+.\"  /        \___  | / __ \|   |  \  |_> >___ \\  ___/
+.\" /_______  / ____|(____  /___|  /   __/____  >\___  >
+.\"          \/\/          \/     \/|__|       \/     \/
+.\"
+.\" *
+.\" * Copyright (C) 2025, Gen0Sec, <support@gen0sec.com>, et al.
+.\" *
+.\" * This software is licensed as described in the file copyright, which
+.\" * you should have received as part of this distribution. The terms
+.\" * are also available at https://github.com/gen0sec/synapse/blob/main/LICENSE.
+.\" *
+.\" *
+.\" * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+.\" * KIND, either express or implied.
+.\" *
+.\" **************************************************************************
+.\"
+.TH synapse 1 "01 Jun 2022" "SYNAPSE SYNAPSE_VERSION" "SYNAPSE Manual"
+
+.SH NAME
+.B synapse
+- High-performance reverse proxy and firewall
+
+.SH SYNOPSIS
+.B synapse
+[\fIOPTIONS\fR]
+
+.SH DESCRIPTION
+Synapse is a high-performance reverse proxy and firewall built with Rust, featuring XDP-based packet filtering, dynamic access rules, threat intelligence integration, and advanced routing capabilities. It can operate in reverse proxy mode or firewall-only mode, providing ultra-low latency protection at the kernel level.
+
+Some of the features provided by Synapse are:
+
+.RS
+.nf
+- XDP-based packet filtering for kernel-level protection
+- HTTP/HTTPS reverse proxy with TLS support
+- Dynamic access rules with automatic updates
+- Threat intelligence integration
+- CAPTCHA protection (hCaptcha, reCAPTCHA, Cloudflare Turnstile)
+- Content scanning with ClamAV integration
+- Automatic TLS certificate management (ACME/Let's Encrypt)
+- Advanced upstream routing with service discovery
+- Hot-reloadable configuration
+.RE
+
+.SH FILES
+.TP
+.I
+/etc/synapse/config.yaml
+.TP
+.I
+/etc/synapse/upstreams.yaml
+.TP
+.I
+/usr/bin/synapse
+.TP
+.I
+/var/lib/synapse/
+.TP
+.I
+/var/log/synapse/
+
+.SH DIAGNOSTICS
+.PP
+The activity performed using this utility is logged in the systemd journal and can be viewed with:
+.B journalctl -u synapse
+.PP
+Configuration files are located in /etc/synapse/
+
+.SH COPYRIGHT
+.PP
+Copyright 2021 Gen0Sec. All rights reserved
+https://gen0sec.com/
+
+.SH CREDITS
+.PP
+This man page is created by the Gen0Sec team <support@gen0sec.com>
+
+.SH
+.PP
+Gen0Sec synapse
