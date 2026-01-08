@@ -614,6 +614,11 @@ pub struct Args {
     #[arg(long, short = 'c')]
     pub config: Option<PathBuf>,
 
+    /// Path to security rules configuration file (access rules and WAF rules)
+    /// Used when no Gen0Sec API key is provided as a fallback
+    #[arg(long, default_value = "security_rules.yaml")]
+    pub security_rules_config: PathBuf,
+
     /// Clear a specific certificate from local filesystem and Redis
     #[arg(long)]
     pub clear_certificate: Option<String>,
