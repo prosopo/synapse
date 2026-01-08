@@ -30,27 +30,27 @@ jobs:
         run: sudo dpkg --purge synapse
 
 
-  Build-install-redhat:
+  Build-install-rocky:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
 
-      - name: Build systemd-enabled Red Hat image
+      - name: Build systemd-enabled Rocky Linux image
         shell: bash
         run: |
           set -euxo pipefail
           
-          # Create a Dockerfile for systemd-enabled Red Hat UBI
-          cat > /tmp/Dockerfile.redhat-systemd << 'EOF'
-          FROM redhat/ubi10:10.1-1766033862
-          RUN yum install -y systemd systemd-libs && yum clean all
+          # Create a Dockerfile for systemd-enabled Rocky Linux
+          cat > /tmp/Dockerfile.rocky-systemd << 'EOF'
+          FROM rockylinux:9
+          RUN dnf install -y systemd systemd-libs && dnf clean all
           CMD ["/usr/lib/systemd/systemd"]
           EOF
           
-          docker build -t redhat-systemd -f /tmp/Dockerfile.redhat-systemd /tmp
+          docker build -t rocky-systemd -f /tmp/Dockerfile.rocky-systemd /tmp
 
-      - name: Start Red Hat systemd container (PID 1) + install deps
+      - name: Start Rocky Linux systemd container (PID 1) + install deps
         shell: bash
         run: |
           set -euxo pipefail
@@ -65,7 +65,7 @@ jobs:
             --tmpfs /tmp:exec \
             -v "${GITHUB_WORKSPACE}:/workspace:rw" \
             -w /workspace \
-            redhat-systemd
+            rocky-systemd
 
           # Wait for systemd to come up
           sleep 5
@@ -79,11 +79,14 @@ jobs:
 
           # Install build/runtime deps inside the RPM OS
           docker exec synapse-rpm-test bash -lc '
-            yum install -y git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
+            # Enable CRB repo for dev tools like rpm-build
+            dnf install -y dnf-plugins-core
+            dnf config-manager --set-enabled crb
+            dnf install -y git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
             curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           '
 
-      - name: Build RPM inside Red Hat
+      - name: Build RPM inside Rocky Linux
         shell: bash
         run: |
           set -euxo pipefail
@@ -93,13 +96,13 @@ jobs:
             ./builder.sh
           '
 
-      - name: Install RPM inside Red Hat
+      - name: Install RPM inside Rocky Linux
         shell: bash
         run: |
           set -euxo pipefail
           docker exec synapse-rpm-test bash -lc '
             cd /workspace/pkg/rpm
-            yum install -y ./synapse*.rpm
+            dnf install -y ./synapse*.rpm
           '
 
       - name: Start Synapse service
@@ -126,5 +129,5 @@ jobs:
         shell: bash
         run: |
           set +e
-          docker exec synapse-rpm-test yum remove -y synapse
+          docker exec synapse-rpm-test dnf remove -y synapse
           docker rm -f synapse-rpm-test
