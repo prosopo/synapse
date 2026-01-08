@@ -1,8 +1,6 @@
-FROM rockylinux:9
+FROM fedora:latest
 
-RUN dnf install -y dnf-plugins-core && \
-    dnf config-manager --set-enabled crb && \
-    dnf update -y && \
+RUN dnf update -y && \
     dnf install -y rpm-build tar gcc openssl-devel curl git && \
     dnf clean all
 

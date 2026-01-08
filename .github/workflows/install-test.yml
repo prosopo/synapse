@@ -30,27 +30,27 @@ jobs:
         run: sudo dpkg --purge synapse
 
 
-  Build-install-rocky:
+  Build-install-fedora:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
 
-      - name: Build systemd-enabled Rocky Linux image
+      - name: Build systemd-enabled Fedora image
         shell: bash
         run: |
           set -euxo pipefail
           
-          # Create a Dockerfile for systemd-enabled Rocky Linux
-          cat > /tmp/Dockerfile.rocky-systemd << 'EOF'
-          FROM rockylinux:9
+          # Create a Dockerfile for systemd-enabled Fedora
+          cat > /tmp/Dockerfile.fedora-systemd << 'EOF'
+          FROM fedora:latest
           RUN dnf install -y systemd systemd-libs && dnf clean all
           CMD ["/usr/lib/systemd/systemd"]
           EOF
           
-          docker build -t rocky-systemd -f /tmp/Dockerfile.rocky-systemd /tmp
+          docker build -t fedora-systemd -f /tmp/Dockerfile.fedora-systemd /tmp
 
-      - name: Start Rocky Linux systemd container (PID 1) + install deps
+      - name: Start Fedora systemd container (PID 1) + install deps
         shell: bash
         run: |
           set -euxo pipefail
@@ -65,7 +65,7 @@ jobs:
             --tmpfs /tmp:exec \
             -v "${GITHUB_WORKSPACE}:/workspace:rw" \
             -w /workspace \
-            rocky-systemd
+            fedora-systemd
 
           # Wait for systemd to come up
           sleep 5
@@ -79,14 +79,11 @@ jobs:
 
           # Install build/runtime deps inside the RPM OS
           docker exec synapse-rpm-test bash -lc '
-            # Enable CRB repo for dev tools like rpm-build
-            dnf install -y dnf-plugins-core
-            dnf config-manager --set-enabled crb
             dnf install -y git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
             curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           '
 
-      - name: Build RPM inside Rocky Linux
+      - name: Build RPM inside Fedora
         shell: bash
         run: |
           set -euxo pipefail
@@ -96,7 +93,7 @@ jobs:
             ./builder.sh
           '
 
-      - name: Install RPM inside Rocky Linux
+      - name: Install RPM inside Fedora
         shell: bash
         run: |
           set -euxo pipefail
