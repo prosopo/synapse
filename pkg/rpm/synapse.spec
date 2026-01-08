@@ -15,6 +15,7 @@ Vendor:      Gen0Sec <support@gen0sec.com>
 Packager:    Gen0Sec <support@gen0sec.com>
 AutoReqProv: no
 ExclusiveOS: linux
+Requires: openssl
 
 %description
 Synapse is a high-performance reverse proxy and firewall built with Rust, featuring
