@@ -87,7 +87,7 @@ impl ProxyHttp for LB {
         // Check if IP is blocked by access rules
         if let Some(peer_addr) = session.client_addr().and_then(|addr| addr.as_inet()) {
             let client_ip: std::net::IpAddr = peer_addr.ip().into();
-            
+
             // Check if IP is blocked
             if crate::access_rules::is_ip_blocked_by_access_rules(client_ip) {
                 log::info!("Userland access rules: Blocked request from IP: {} (matched block rule)", client_ip);
@@ -493,7 +493,7 @@ impl ProxyHttp for LB {
 
         // let host_name = return_header_host(&session);
         match ctx.hostname.as_ref() {
-            Some(hostname) => {
+            Some(_hostname) => {
                 match ctx.upstream_peer.as_ref() {
                     // Some((address, port, ssl, is_h2, https_proxy_enabled)) => {
                     Some(innermap) => {
@@ -503,7 +503,9 @@ impl ProxyHttp for LB {
                             peer.options.alpn = ALPN::H2;
                         }
                         if innermap.ssl_enabled {
-                            peer.sni = hostname.clone();
+                            // Use upstream server address for SNI, not the incoming hostname
+                            // This ensures the SNI matches what the upstream server expects
+                            peer.sni = innermap.address.clone();
                             peer.options.verify_cert = false;
                             peer.options.verify_hostname = false;
                         }

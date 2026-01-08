@@ -38,6 +38,8 @@ pub struct Config {
     #[serde(default)]
     pub arxignis: Gen0SecConfig,
     #[serde(default)]
+    pub geoip: GeoipConfig,
+    #[serde(default)]
     pub content_scanning: ContentScanningCliConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -136,6 +138,9 @@ pub struct Gen0SecConfig {
     pub api_key: String,
     #[serde(default = "default_base_url")]
     pub base_url: String,
+    /// Threat MMDB database configuration
+    #[serde(default)]
+    pub threat: GeoipDatabaseConfig,
     #[serde(default = "default_log_sending_enabled")]
     pub log_sending_enabled: bool,
     #[serde(default = "default_include_response_body")]
@@ -150,6 +155,8 @@ fn default_base_url() -> String {
     "https://api.gen0sec.com/v1".to_string()
 }
 
+
+
 fn default_log_sending_enabled() -> bool {
     true
 }
@@ -160,6 +167,42 @@ fn default_include_response_body() -> bool {
 
 fn default_max_body_size() -> usize {
     1024 * 1024 // 1MB
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeoipDatabaseConfig {
+    /// URL to download GeoIP MMDB file
+    #[serde(default)]
+    pub url: String,
+    /// Optional local path to store/read the GeoIP MMDB file
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Optional custom headers to add to download requests
+    #[serde(default)]
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Refresh interval in seconds (optional, overrides parent refresh_secs if set)
+    #[serde(default)]
+    pub refresh_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeoipConfig {
+    /// Country database configuration
+    #[serde(default)]
+    pub country: GeoipDatabaseConfig,
+    /// ASN database configuration
+    #[serde(default)]
+    pub asn: GeoipDatabaseConfig,
+    /// City database configuration
+    #[serde(default)]
+    pub city: GeoipDatabaseConfig,
+    /// How often to refresh the GeoIP MMDB from the remote URL (seconds). Default: 28800 (8 hours)
+    #[serde(default = "default_geoip_refresh_secs")]
+    pub refresh_secs: u64,
+}
+
+fn default_geoip_refresh_secs() -> u64 {
+    28800 // 8 hours
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -229,6 +272,7 @@ impl Config {
             arxignis: Gen0SecConfig {
                 api_key: "".to_string(),
                 base_url: "https://api.gen0sec.com/v1".to_string(),
+                threat: GeoipDatabaseConfig::default(),
                 log_sending_enabled: true,
                 include_response_body: true,
                 max_body_size: 1024 * 1024, // 1MB
@@ -240,6 +284,27 @@ impl Config {
                     token_ttl: 7200,
                     cache_ttl: 300,
                 },
+            },
+            geoip: GeoipConfig {
+                country: GeoipDatabaseConfig {
+                    url: "".to_string(),
+                    path: None,
+                    headers: None,
+                    refresh_secs: None,
+                },
+                asn: GeoipDatabaseConfig {
+                    url: "".to_string(),
+                    path: None,
+                    headers: None,
+                    refresh_secs: None,
+                },
+                city: GeoipDatabaseConfig {
+                    url: "".to_string(),
+                    path: None,
+                    headers: None,
+                    refresh_secs: None,
+                },
+                refresh_secs: 28800,
             },
             content_scanning: ContentScanningCliConfig {
                 enabled: false,
@@ -548,6 +613,11 @@ pub struct Args {
     /// Path to configuration file (YAML format)
     #[arg(long, short = 'c')]
     pub config: Option<PathBuf>,
+
+    /// Path to security rules configuration file (access rules and WAF rules)
+    /// Used when no Gen0Sec API key is provided as a fallback
+    #[arg(long, default_value = "security_rules.yaml")]
+    pub security_rules_config: PathBuf,
 
     /// Clear a specific certificate from local filesystem and Redis
     #[arg(long)]

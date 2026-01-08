@@ -1,0 +1,67 @@
+#!/bin/bash
+
+set -e
+
+# Suppress systemctl errors if not available (e.g., in containers)
+if ! command -v systemctl >/dev/null 2>&1; then
+    # Create a dummy systemctl function to prevent errors
+    systemctl() {
+        case "$1" in
+            enable|start|stop|restart|reload|daemon-reload)
+                return 0
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    }
+    export -f systemctl
+fi
+
+# Create certs directory if it doesn't exist
+mkdir -p /etc/synapse/certs
+
+# Generate default certificate if it doesn't exist
+if [ ! -f /etc/synapse/certs/default.crt ] || [ ! -f /etc/synapse/certs/default.key ]; then
+    echo "Generating default SSL certificate..."
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/synapse/certs/default.key \
+        -out /etc/synapse/certs/default.crt \
+        -subj "/C=US/ST=State/L=City/O=Synapse/CN=localhost" \
+        2>/dev/null
+
+    # Set appropriate permissions
+    chmod 600 /etc/synapse/certs/default.key
+    chmod 644 /etc/synapse/certs/default.crt
+
+    # Set ownership to root:root (or synapse user if it exists)
+    if id synapse >/dev/null 2>&1; then
+        chown synapse:synapse /etc/synapse/certs/default.key /etc/synapse/certs/default.crt
+    else
+        chown root:root /etc/synapse/certs/default.key /etc/synapse/certs/default.crt
+    fi
+
+    echo "Default SSL certificate generated at /etc/synapse/certs/default.crt"
+fi
+
+# Create log directory if it doesn't exist
+mkdir -p /var/log/synapse
+if id synapse >/dev/null 2>&1; then
+    chown root:root /var/log/synapse
+fi
+
+# Create working directory for the service
+mkdir -p /var/lib/synapse
+if id synapse >/dev/null 2>&1; then
+    chown root:root /var/lib/synapse
+fi
+
+#DEBHELPER#
+
+# Reload systemd daemon to recognize the new service file
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0
+
