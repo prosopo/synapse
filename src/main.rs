@@ -63,7 +63,6 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to install rustls crypto provider: {:?}", e))?;
 
     let args = Args::parse();
-
     // Handle clear certificate command (runs before loading full config)
     if let Some(certificate_name) = &args.clear_certificate {
         // Initialize minimal runtime for async operations
@@ -85,7 +84,11 @@ fn main() -> Result<()> {
         }
 
         // Get certificate path from config
-        let certificate_path = config.pingora.proxy_certificates.unwrap_or_else(|| "/etc/synapse/certs".to_string());
+        let certificate_path = config
+            .pingora
+            .proxy_certificates
+            .clone()
+            .unwrap_or_else(|| "/etc/synapse/certs".to_string());
 
         // Clear the certificate
         rt.block_on(crate::worker::certificate::clear_certificate(
@@ -96,12 +99,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Validate required arguments when no config file is provided
-    if args.config.is_none() {
-        if args.arxignis_api_key.is_none() {
-            return Err(anyhow::anyhow!("--arxignis-api-key is required when no config file is provided"));
-        }
-    }
+    // API key is optional - allow running in local mode without it
 
     // Load configuration
     let config = Config::load_from_args(&args)
@@ -190,7 +188,7 @@ fn main() -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn async_main(_args: Args, config: Config) -> Result<()> {
+async fn async_main(args: Args, config: Config) -> Result<()> {
 
     if config.daemon.enabled {
         log::info!("Running in daemon mode (PID file: {})", config.daemon.pid_file);
@@ -415,7 +413,6 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
     } else {
         log::info!("Embedded ACME server disabled (acme.enabled: false)");
     }
-
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Initialize Redis manager if Redis URL is provided
@@ -449,7 +446,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
     // Register certificate worker only if Redis was successfully initialized
     if redis_initialized {
         // Parse proxy_certificates from config file (under pingora section)
-        let certificate_path = if let Some(config_path) = &_args.config {
+        let certificate_path = if let Some(config_path) = &args.config {
             std::fs::read_to_string(config_path)
                 .ok()
                 .and_then(|content| serde_yaml::from_str::<serde_yaml::Value>(&content).ok())
@@ -551,62 +548,234 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                    config.arxignis.log_sending_enabled, !config.arxignis.api_key.is_empty());
     }
 
+    // Determine if we have API key for full functionality
+    let has_api_key = !config.arxignis.api_key.is_empty();
+
+    // Display local mode banner if no API key
+    if !has_api_key {
+        log::warn!("════════════════════════════════════════════════════════════════");
+        log::warn!("  Gen0Sec API key not provided - Running in LOCAL MODE");
+        log::warn!("════════════════════════════════════════════════════════════════");
+        log::warn!("  ✓ Available: Reverse proxy, TLS, content scanning, CAPTCHA");
+        log::warn!("  ✓ Available: Static access rules and WAF rules from local file");
+        log::warn!("  ✗ Unavailable: Threat intelligence (IP reputation, geo, ASN)");
+        log::warn!("  ✗ Unavailable: Dynamic rule updates (requires app restart)");
+        log::warn!("  ✗ Unavailable: Centralized event logging and analytics");
+        log::warn!("════════════════════════════════════════════════════════════════");
+        log::warn!("  To enable full features, set arxignis_api_key in config");
+        log::warn!("  or use --arxignis-api-key CLI argument");
+        log::warn!("════════════════════════════════════════════════════════════════");
+    }
+
     // Build list of interfaces to attach
-    if !config.arxignis.base_url.is_empty() && !config.arxignis.api_key.is_empty() {
+    if has_api_key && !config.arxignis.base_url.is_empty() {
         if let Err(e) = init_config(
             config.arxignis.base_url.clone(),
             config.arxignis.api_key.clone(),
-        ).await {
+        )
+        .await
+        {
             log::error!("Failed to initialize HTTP filter with config: {}", e);
             log::error!("Aborting startup because WAF config could not be loaded");
             return Err(e);
         }
 
-        // Initialize threat intelligence client
-        if let Err(e) = threat::init_threat_client(
-            config.arxignis.base_url.clone(),
-            config.arxignis.api_key.clone(),
-        ).await {
-            log::warn!("Failed to initialize threat client: {}", e);
+        // Initialize threat intelligence client (Threat MMDB → GeoIP MMDB fallback)
+        let has_threat = !config.arxignis.threat.url.is_empty() || config.arxignis.threat.path.is_some();
+        let has_geoip = !config.geoip.country.url.is_empty()
+            || !config.geoip.asn.url.is_empty()
+            || !config.geoip.city.url.is_empty()
+            || config.geoip.country.path.is_some()
+            || config.geoip.asn.path.is_some()
+            || config.geoip.city.path.is_some();
+
+        if has_threat || has_geoip {
+            if let Err(e) = threat::init_threat_client(
+                config.arxignis.threat.path.clone(),
+                config.geoip.country.path.clone(),
+                config.geoip.asn.path.clone(),
+                config.geoip.city.path.clone(),
+            )
+            .await
+            {
+                log::warn!("Failed to initialize threat client: {}", e);
+            } else {
+                log::info!("Threat intelligence client initialized");
+
+                // Register Threat MMDB refresh worker if configured
+                let refresh_interval = config.arxignis.threat.refresh_secs.unwrap_or(300);
+                if !config.arxignis.threat.url.is_empty() && refresh_interval > 0 {
+                    let worker_config = worker::WorkerConfig {
+                        name: "threat_mmdb".to_string(),
+                        interval_secs: refresh_interval,
+                        enabled: true,
+                    };
+                    let worker = worker::threat_mmdb::ThreatMmdbWorker::new(
+                        refresh_interval,
+                        config.arxignis.threat.url.clone(),
+                        config.arxignis.threat.path.clone(),
+                        config.arxignis.threat.headers.clone(),
+                        config.arxignis.api_key.clone(),
+                    );
+                    if let Err(e) = worker_manager.register_worker(worker_config, worker) {
+                        log::error!("Failed to register threat MMDB worker: {}", e);
+                    } else {
+                        log::info!(
+                            "Registered threat MMDB worker (interval: {}s, checks for threat intel updates)",
+                            refresh_interval
+                        );
+                    }
+                }
+
+                // Register GeoIP MMDB refresh workers if configured
+                let refresh_interval = config.geoip.refresh_secs;
+
+                // Country database worker
+                if !config.geoip.country.url.is_empty() && refresh_interval > 0 {
+                    let worker_config = worker::WorkerConfig {
+                        name: "geoip_country_mmdb".to_string(),
+                        interval_secs: refresh_interval,
+                        enabled: true,
+                    };
+                    let worker = worker::geoip_mmdb::GeoipMmdbWorker::new(
+                        refresh_interval,
+                        config.geoip.country.url.clone(),
+                        "".to_string(), // versions_url not used for geoip
+                        config.geoip.country.path.clone(),
+                        config.geoip.country.headers.clone(),
+                        worker::geoip_mmdb::GeoipDatabaseType::Country,
+                    );
+                    if let Err(e) = worker_manager.register_worker(worker_config, worker) {
+                        log::error!("Failed to register GeoIP Country MMDB worker: {}", e);
+                    } else {
+                        log::info!("Registered GeoIP Country MMDB worker (interval: {}s)", refresh_interval);
+                    }
+                }
+
+                // ASN database worker
+                if !config.geoip.asn.url.is_empty() && refresh_interval > 0 {
+                    let worker_config = worker::WorkerConfig {
+                        name: "geoip_asn_mmdb".to_string(),
+                        interval_secs: refresh_interval,
+                        enabled: true,
+                    };
+                    let worker = worker::geoip_mmdb::GeoipMmdbWorker::new(
+                        refresh_interval,
+                        config.geoip.asn.url.clone(),
+                        "".to_string(),
+                        config.geoip.asn.path.clone(),
+                        config.geoip.asn.headers.clone(),
+                        worker::geoip_mmdb::GeoipDatabaseType::Asn,
+                    );
+                    if let Err(e) = worker_manager.register_worker(worker_config, worker) {
+                        log::error!("Failed to register GeoIP ASN MMDB worker: {}", e);
+                    } else {
+                        log::info!("Registered GeoIP ASN MMDB worker (interval: {}s)", refresh_interval);
+                    }
+                }
+
+                // City database worker
+                if !config.geoip.city.url.is_empty() && refresh_interval > 0 {
+                    let worker_config = worker::WorkerConfig {
+                        name: "geoip_city_mmdb".to_string(),
+                        interval_secs: refresh_interval,
+                        enabled: true,
+                    };
+                    let worker = worker::geoip_mmdb::GeoipMmdbWorker::new(
+                        refresh_interval,
+                        config.geoip.city.url.clone(),
+                        "".to_string(),
+                        config.geoip.city.path.clone(),
+                        config.geoip.city.headers.clone(),
+                        worker::geoip_mmdb::GeoipDatabaseType::City,
+                    );
+                    if let Err(e) = worker_manager.register_worker(worker_config, worker) {
+                        log::error!("Failed to register GeoIP City MMDB worker: {}", e);
+                    } else {
+                        log::info!("Registered GeoIP City MMDB worker (interval: {}s)", refresh_interval);
+                    }
+                }
+            }
         } else {
-            log::info!("Threat intelligence client initialized");
+            log::warn!("Threat and GeoIP MMDB URLs not configured; threat lookups will use API only");
         }
 
         // Initialize captcha client if configuration is provided
         if let (Some(site_key), Some(secret_key), Some(jwt_secret)) = (
             &config.arxignis.captcha.site_key,
             &config.arxignis.captcha.secret_key,
-            &config.arxignis.captcha.jwt_secret
+            &config.arxignis.captcha.jwt_secret,
         ) {
             let captcha_config = CaptchaConfig {
                 site_key: site_key.clone(),
                 secret_key: secret_key.clone(),
                 jwt_secret: jwt_secret.clone(),
-                provider: CaptchaProvider::from_str(&config.arxignis.captcha.provider).unwrap_or(CaptchaProvider::HCaptcha),
+                provider: CaptchaProvider::from_str(&config.arxignis.captcha.provider)
+                    .unwrap_or(CaptchaProvider::HCaptcha),
                 token_ttl_seconds: config.arxignis.captcha.token_ttl,
                 validation_cache_ttl_seconds: config.arxignis.captcha.cache_ttl,
             };
 
-            if let Err(e) = init_captcha_client(
-                captcha_config,
-            ).await {
+            if let Err(e) = init_captcha_client(captcha_config).await {
                 log::warn!("Failed to initialize captcha client: {}", e);
             } else {
-                log::info!("Captcha client initialized with provider: {}", config.arxignis.captcha.provider);
+                log::info!(
+                    "Captcha client initialized with provider: {}",
+                    config.arxignis.captcha.provider
+                );
                 // Start captcha cache cleanup task
                 start_cache_cleanup_task().await;
             }
         } else {
-            log::info!("Captcha client not initialized (missing site_key, secret_key, or jwt_secret)");
+            log::info!(
+                "Captcha client not initialized (missing site_key, secret_key, or jwt_secret)"
+            );
         }
     } else {
-        log::warn!("No API credentials provided, HTTP filter will not be initialized");
+        // LOCAL MODE: Load security rules from local file
+        log::info!("Loading security rules from local file: {}", args.security_rules_config.display());
+        
+        let security_rules_path = args.security_rules_config.clone();
+        
+        // Load and initialize WAF from local file
+        match worker::config::load_config_from_file(&security_rules_path).await {
+            Ok(config_response) => {
+                let num_access_ips = config_response.config.access_rules.block.ips.len();
+                let num_waf_rules = config_response.config.waf_rules.rules.len();
+                log::info!("Loaded {} access rule IPs and {} WAF rules from local file", num_access_ips, num_waf_rules);
+                
+                // Store config globally for access rules
+                worker::config::set_global_config(config_response.config.clone());
+                
+                // Initialize WAF with local rules
+                if let Err(e) = crate::waf::wirefilter::load_waf_rules(config_response.config.waf_rules.rules).await {
+                    log::warn!("Failed to load WAF rules from local file: {}", e);
+                } else {
+                    log::info!("HTTP filter initialized from local file with {} WAF rules", num_waf_rules);
+                }
+                
+                // Update access rules in XDP if available
+                if !state.skels.is_empty() {
+                    if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&state.skels) {
+                        log::warn!("Failed to apply access rules from local file to XDP: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to load security rules from local file: {}", e);
+                log::error!("HTTP filter will not be initialized. Please check security_rules.yaml");
+            }
+        }
+        
+        // Threat intelligence not available in local mode
+        log::info!("Threat intelligence client NOT initialized (API key not provided)");
+        log::info!("WAF rules using threat.* or ip.src.country fields will not work");
     }
 
     // Access rules were already initialized after XDP attachment above
 
     // Register config worker to fetch and apply configuration periodically
-    if !config.arxignis.base_url.is_empty() && !config.arxignis.api_key.is_empty() {
+    if has_api_key && !config.arxignis.base_url.is_empty() {
         let refresh_interval = 10; // 10 seconds config refresh interval
         let worker_config = worker::WorkerConfig {
             name: "config".to_string(),
@@ -619,6 +788,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             config.arxignis.api_key.clone(),
             refresh_interval,
             state.skels.clone(),
+            args.security_rules_config.clone(),
         );
 
         if let Err(e) = worker_manager.register_worker(worker_config, config_worker) {
@@ -631,7 +801,27 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
             }
         }
     } else {
-        log::info!("Skipping config worker (no API credentials provided)");
+        // In local mode, register config worker that loads from file at startup only
+        let refresh_interval = 10;
+        let worker_config = worker::WorkerConfig {
+            name: "config".to_string(),
+            interval_secs: refresh_interval,
+            enabled: true,
+        };
+
+        let config_worker = worker::config::ConfigWorker::new(
+            String::new(),
+            String::new(),
+            refresh_interval,
+            state.skels.clone(),
+            args.security_rules_config.clone(),
+        );
+
+        if let Err(e) = worker_manager.register_worker(worker_config, config_worker) {
+            log::error!("Failed to register config worker: {}", e);
+        } else {
+            log::info!("Registered config worker (local mode) - loads from file at startup only");
+        }
     }
 
     // Start the old Pingora proxy system in a separate thread (non-blocking)
@@ -640,6 +830,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
         let bpf_stats_config = config.bpf_stats.clone();
         let logging_config = config.logging.clone();
         let arxignis_config = config.arxignis.clone();
+        let geoip_config = config.geoip.clone();
         let network_config = config.network.clone();
         let tcp_fingerprint_config = config.tcp_fingerprint.clone();
         let pingora_config = config.pingora.clone();
@@ -649,6 +840,7 @@ async fn async_main(_args: Args, config: Config) -> Result<()> {
                 redis: Default::default(),
                 network: network_config,
                 arxignis: arxignis_config,
+                geoip: geoip_config,
                 content_scanning: Default::default(),
                 logging: logging_config,
                 bpf_stats: bpf_stats_config,

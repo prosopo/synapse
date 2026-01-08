@@ -432,9 +432,12 @@ impl HttpFilter {
 
         // Fetch threat intelligence data for the source IP
         // Fetch full threat response for access logging, and WAF fields for rule evaluation
+        log::info!("🔍 [WAF] Looking up GeoIP for: {}", peer_addr.ip());
         let threat_response = threat::get_threat_intel(&peer_addr.ip().to_string()).await.ok().flatten();
         let _threat_fields = if let Some(ref threat_resp) = threat_response {
             let waf_fields = threat::WafFields::from(threat_resp);
+            log::info!("🔍 [WAF] GeoIP Result: Country='{}', ASN={}, ThreatScore={}", 
+                waf_fields.ip_src_country, waf_fields.ip_src_asn, waf_fields.threat_score);
             // Set threat intelligence fields
             ctx.set_field_value(
                 self.scheme.get_field("ip.src.country").unwrap(),
@@ -463,6 +466,7 @@ impl HttpFilter {
             Some(waf_fields)
         } else {
             // No threat data found, set default values
+            log::warn!("🔍 [WAF] No GeoIP data found for {}, setting empty country", peer_addr.ip());
             ctx.set_field_value(
                 self.scheme.get_field("ip.src.country").unwrap(),
                 "",
@@ -752,6 +756,37 @@ pub fn update_http_filter_from_config_value(config: &Config) -> anyhow::Result<(
         log::warn!("HTTP filter not initialized, cannot update");
         Ok(())
     }
+}
+
+/// Load WAF rules from a Vec of WafRule (for local mode)
+pub async fn load_waf_rules(waf_rules: Vec<crate::worker::config::WafRule>) -> anyhow::Result<()> {
+    // Create a minimal config with just WAF rules
+    let config = crate::worker::config::Config {
+        access_rules: crate::worker::config::AccessRule {
+            id: "local".to_string(),
+            name: "Local Rules".to_string(),
+            description: "Local security rules".to_string(),
+            allow: crate::worker::config::RuleSet {
+                asn: vec![],
+                country: vec![],
+                ips: vec![],
+            },
+            block: crate::worker::config::RuleSet {
+                asn: vec![],
+                country: vec![],
+                ips: vec![],
+            },
+        },
+        waf_rules: crate::worker::config::WafRules { rules: waf_rules },
+        content_scanning: crate::content_scanning::ContentScanningConfig::default(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        last_modified: chrono::Utc::now().to_rfc3339(),
+    };
+    
+    let filter = HttpFilter::new_from_config(&config)?;
+    set_global_http_filter(filter)?;
+    Ok(())
 }
 
 /// Evaluate WAF rules for a Pingora request

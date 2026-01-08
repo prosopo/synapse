@@ -12,6 +12,7 @@ use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::{background_service, Opt};
 use pingora_core::server::Server;
 use std::fs;
+use std::process;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -274,10 +275,11 @@ pub fn run_with_config(config: Option<crate::cli::Config>) {
 
     let (tx, rx) = channel();
     ctrlc::set_handler(move || {
-        tx.send(()).expect("Could not send signal on channel.")
+        let _ = tx.send(());
     })
     .expect("Error setting Ctrl-C handler");
     rx.recv()
         .expect("Could not receive from channel.");
     info!("Signal received ! Exiting...");
+    process::exit(0);
 }
