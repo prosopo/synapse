@@ -4,9 +4,27 @@
     synapse_arch: "{{ ansible_facts['architecture'] }}"
   when: synapse_arch is not defined
 
-- name: Map architecture names
+- name: Map architecture names for DEB packages
   ansible.builtin.set_fact:
-    synapse_arch: "{{ synapse_arch | replace('x86_64', 'x86_64') | replace('aarch64', 'aarch64') | replace('arm64', 'aarch64') }}"
+    synapse_arch_deb: >-
+      {%- if synapse_arch == 'x86_64' -%}
+      amd64
+      {%- elif synapse_arch == 'aarch64' or synapse_arch == 'arm64' -%}
+      arm64
+      {%- else -%}
+      {{ synapse_arch }}
+      {%- endif -%}
+
+- name: Map architecture names for RPM and binary packages
+  ansible.builtin.set_fact:
+    synapse_arch_rpm: >-
+      {%- if synapse_arch == 'x86_64' -%}
+      x86_64
+      {%- elif synapse_arch == 'aarch64' or synapse_arch == 'arm64' -%}
+      aarch64
+      {%- else -%}
+      {{ synapse_arch }}
+      {%- endif -%}
 
 - name: Install curl
   ansible.builtin.package:
@@ -25,6 +43,16 @@
   when:
     - clamav_enabled | bool
     - ansible_facts["os_family"] == 'Debian'
+
+- name: Install EPEL repository (RHEL/CentOS/Oracle Linux)
+  ansible.builtin.package:
+    name: epel-release
+    state: present
+  when:
+    - clamav_enabled | bool
+    - ansible_facts["os_family"] == 'RedHat'
+    - ansible_facts["distribution"] != 'Fedora'
+  ignore_errors: true
 
 - name: Install ClamAV (RHEL/CentOS/Fedora)
   ansible.builtin.package:
@@ -58,7 +86,7 @@
     - clamav_enabled | bool
     - ansible_facts["os_family"] == 'Debian'
 
-- name: Set ClamAV config directory (Fedora/RHEL)
+- name: Set ClamAV config directory and service (Fedora)
   ansible.builtin.set_fact:
     clamav_config_dir: "/etc/clamd.d"
     clamav_config_file: "/etc/clamd.d/scan.conf"
@@ -66,6 +94,17 @@
   when:
     - clamav_enabled | bool
     - ansible_facts["os_family"] == 'RedHat'
+    - ansible_facts["distribution"] == 'Fedora'
+
+- name: Set ClamAV config directory and service (RHEL/CentOS/Oracle Linux)
+  ansible.builtin.set_fact:
+    clamav_config_dir: "/etc/clamd.d"
+    clamav_config_file: "/etc/clamd.d/scan.conf"
+    clamav_service_name: "clamd"
+  when:
+    - clamav_enabled | bool
+    - ansible_facts["os_family"] == 'RedHat'
+    - ansible_facts["distribution"] != 'Fedora'
 
 - name: Set ClamAV service name (Debian/Ubuntu)
   ansible.builtin.set_fact:
@@ -103,33 +142,57 @@
     daemon_reload: yes
   when: clamav_enabled | bool
 
-- name: Enable and start ClamAV daemon
+- name: Check if ClamAV service exists
+  ansible.builtin.shell:
+    cmd: systemctl list-unit-files --type=service --no-pager | grep -E "(clamav-daemon|clamd@scan|clamd\.service|clamd@)" | head -1 | awk '{print $1}' || echo ""
+  register: clamav_service_found
+  changed_when: false
+  failed_when: false
+  when: clamav_enabled | bool
+
+- name: Enable and start ClamAV daemon (if service exists)
   ansible.builtin.systemd:
-    name: "{{ clamav_service_name | default('clamav-daemon') }}"
+    name: "{{ clamav_service_found.stdout | default(clamav_service_name | default('clamav-daemon')) }}"
     enabled: yes
     state: started
-  when: clamav_enabled | bool
+  when:
+    - clamav_enabled | bool
+    - clamav_service_found.stdout != ""
+  ignore_errors: true
+  register: clamav_service_result
+
+- name: Display ClamAV service status
+  ansible.builtin.debug:
+    msg: >-
+      {%- if clamav_service_found.stdout != "" -%}
+        ClamAV service {{ 'started successfully' if clamav_service_result is succeeded else 'could not be started' }}
+      {%- else -%}
+        ClamAV is installed but no systemd service found. ClamAV may need to be started manually or configured separately.
+      {%- endif -%}
+  when:
+    - clamav_enabled | bool
+    - clamav_service_found is defined
 
 - name: Check if .deb package exists
   ansible.builtin.uri:
-    url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
+    url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse_{{ synapse_version }}-1_{{ synapse_arch_deb }}.deb"
     method: HEAD
     status_code: 200
   register: deb_package_check
   failed_when: false
-  when: ansible_pkg_mgr == 'apt'
+  when: ansible_facts["pkg_mgr"] == 'apt'
 
 - name: Download and install .deb package
   block:
     - name: Download .deb package
       ansible.builtin.get_url:
-        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
-        dest: "/tmp/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
+        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse_{{ synapse_version }}-1_{{ synapse_arch_deb }}.deb"
+        dest: "/tmp/synapse_{{ synapse_version }}-1_{{ synapse_arch_deb }}.deb"
         mode: '0644'
 
     - name: Install .deb package
       ansible.builtin.apt:
-        deb: "/tmp/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
+        deb: "/tmp/synapse_{{ synapse_version }}-1_{{ synapse_arch_deb }}.deb"
         state: present
         update_cache: no
 
@@ -138,57 +201,68 @@
         synapse_installed: true
         synapse_install_method: "deb"
   when:
-    - ansible_pkg_mgr == 'apt'
+    - ansible_facts["pkg_mgr"] == 'apt'
     - deb_package_check.status == 200
 
 - name: Check if .rpm package exists
   ansible.builtin.uri:
-    url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+    url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_version }}-1.{{ synapse_arch_rpm }}.rpm"
     method: HEAD
     status_code: 200
   register: rpm_package_check
   failed_when: false
-  when: ansible_pkg_mgr in ['yum', 'dnf']
+  when: ansible_facts["pkg_mgr"] in ['yum', 'dnf']
 
 - name: Download and install .rpm package
   block:
     - name: Download .rpm package
       ansible.builtin.get_url:
-        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
-        dest: "/tmp/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_version }}-1.{{ synapse_arch_rpm }}.rpm"
+        dest: "/tmp/synapse-{{ synapse_version }}-1.{{ synapse_arch_rpm }}.rpm"
         mode: '0644'
 
     - name: Install .rpm package (dnf)
       ansible.builtin.dnf:
-        name: "/tmp/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+        name: "/tmp/synapse-{{ synapse_version }}-1.{{ synapse_arch_rpm }}.rpm"
         state: present
-      when: ansible_pkg_mgr == 'dnf'
+        disable_gpg_check: true
+      when: ansible_facts["pkg_mgr"] == 'dnf'
 
     - name: Install .rpm package (yum)
       ansible.builtin.yum:
-        name: "/tmp/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+        name: "/tmp/synapse-{{ synapse_version }}-1.{{ synapse_arch_rpm }}.rpm"
         state: present
-      when: ansible_pkg_mgr == 'yum'
+        disable_gpg_check: true
+      when: ansible_facts["pkg_mgr"] == 'yum'
 
     - name: Set installation method fact
       ansible.builtin.set_fact:
         synapse_installed: true
         synapse_install_method: "rpm"
   when:
-    - ansible_pkg_mgr in ['yum', 'dnf']
+    - ansible_facts["pkg_mgr"] in ['yum', 'dnf']
     - rpm_package_check.status == 200
+
+- name: Check if binary tarball exists
+  ansible.builtin.uri:
+    url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_arch_rpm }}-unknown-linux-gnu.tar.gz"
+    method: HEAD
+    status_code: 200
+  register: binary_package_check
+  failed_when: false
+  when: synapse_installed is not defined or synapse_installed != true
 
 - name: Download and install binary (fallback)
   block:
     - name: Download binary tarball
       ansible.builtin.get_url:
-        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_arch }}-unknown-linux-gnu.tar.gz"
-        dest: "/tmp/synapse-{{ synapse_arch }}-unknown-linux-gnu.tar.gz"
+        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_arch_rpm }}-unknown-linux-gnu.tar.gz"
+        dest: "/tmp/synapse-{{ synapse_arch_rpm }}-unknown-linux-gnu.tar.gz"
         mode: '0644'
 
     - name: Extract binary
       ansible.builtin.unarchive:
-        src: "/tmp/synapse-{{ synapse_arch }}-unknown-linux-gnu.tar.gz"
+        src: "/tmp/synapse-{{ synapse_arch_rpm }}-unknown-linux-gnu.tar.gz"
         dest: /usr/local/bin
         remote_src: yes
         mode: '0755'
@@ -197,7 +271,9 @@
       ansible.builtin.set_fact:
         synapse_installed: true
         synapse_install_method: "binary"
-  when: synapse_installed is not defined or synapse_installed != true
+  when:
+    - synapse_installed is not defined or synapse_installed != true
+    - binary_package_check.status == 200
 
 - name: Download systemd service file
   ansible.builtin.get_url:
