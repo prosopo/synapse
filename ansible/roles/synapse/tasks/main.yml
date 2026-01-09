@@ -1,0 +1,224 @@
+---
+- name: Detect architecture
+  ansible.builtin.set_fact:
+    synapse_arch: "{{ ansible_architecture }}"
+  when: synapse_arch is not defined
+
+- name: Map architecture names
+  ansible.builtin.set_fact:
+    synapse_arch: "{{ synapse_arch | replace('x86_64', 'x86_64') | replace('aarch64', 'aarch64') | replace('arm64', 'aarch64') }}"
+
+- name: Install curl
+  ansible.builtin.package:
+    name: curl
+    state: present
+
+- name: Install sed
+  ansible.builtin.package:
+    name: sed
+    state: present
+
+- name: Install ClamAV (Debian/Ubuntu)
+  ansible.builtin.package:
+    name: clamav-daemon
+    state: present
+  when:
+    - clamav_enabled | bool
+    - ansible_facts["os_family"] == 'Debian'
+
+- name: Install ClamAV (RHEL/CentOS/Fedora)
+  ansible.builtin.package:
+    name: clamav
+    state: present
+  when:
+    - clamav_enabled | bool
+    - ansible_facts["os_family"] == 'RedHat'
+
+- name: Install Redis (Debian/Ubuntu)
+  ansible.builtin.package:
+    name: redis-server
+    state: present
+  when:
+    - redis_enabled | bool
+    - ansible_facts["os_family"] == 'Debian'
+
+- name: Install Redis (RHEL/CentOS/Fedora)
+  ansible.builtin.package:
+    name: redis
+    state: present
+  when:
+    - redis_enabled | bool
+    - ansible_facts["os_family"] == 'RedHat'
+
+- name: Create ClamAV directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/systemd/system/clamav-daemon.socket.d
+  when: clamav_enabled | bool
+
+- name: Download ClamAV configuration
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/{{ synapse_branch }}/others/clamd/clamd.conf"
+    dest: /etc/clamav/clamd.conf
+    mode: '0644'
+  when: clamav_enabled | bool
+
+- name: Download ClamAV systemd override
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/{{ synapse_branch }}/others/systemd/clamd/override.conf"
+    dest: /etc/systemd/system/clamav-daemon.socket.d/override.conf
+    mode: '0644'
+  when: clamav_enabled | bool
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  when: clamav_enabled | bool
+
+- name: Enable and start ClamAV daemon
+  ansible.builtin.systemd:
+    name: clamav-daemon
+    enabled: yes
+    state: started
+  when: clamav_enabled | bool
+
+- name: Check if .deb package exists
+  ansible.builtin.uri:
+    url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
+    method: HEAD
+    status_code: 200
+  register: deb_package_check
+  failed_when: false
+  when: ansible_pkg_mgr == 'apt'
+
+- name: Download and install .deb package
+  block:
+    - name: Download .deb package
+      ansible.builtin.get_url:
+        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
+        dest: "/tmp/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
+        mode: '0644'
+
+    - name: Install .deb package
+      ansible.builtin.apt:
+        deb: "/tmp/synapse_{{ synapse_version }}_{{ synapse_arch }}.deb"
+        state: present
+        update_cache: no
+
+    - name: Set installation method fact
+      ansible.builtin.set_fact:
+        synapse_installed: true
+        synapse_install_method: "deb"
+  when:
+    - ansible_pkg_mgr == 'apt'
+    - deb_package_check.status == 200
+
+- name: Check if .rpm package exists
+  ansible.builtin.uri:
+    url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+    method: HEAD
+    status_code: 200
+  register: rpm_package_check
+  failed_when: false
+  when: ansible_pkg_mgr in ['yum', 'dnf']
+
+- name: Download and install .rpm package
+  block:
+    - name: Download .rpm package
+      ansible.builtin.get_url:
+        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+        dest: "/tmp/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+        mode: '0644'
+
+    - name: Install .rpm package (dnf)
+      ansible.builtin.dnf:
+        name: "/tmp/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+        state: present
+      when: ansible_pkg_mgr == 'dnf'
+
+    - name: Install .rpm package (yum)
+      ansible.builtin.yum:
+        name: "/tmp/synapse-{{ synapse_version }}-{{ synapse_arch }}.rpm"
+        state: present
+      when: ansible_pkg_mgr == 'yum'
+
+    - name: Set installation method fact
+      ansible.builtin.set_fact:
+        synapse_installed: true
+        synapse_install_method: "rpm"
+  when:
+    - ansible_pkg_mgr in ['yum', 'dnf']
+    - rpm_package_check.status == 200
+
+- name: Download and install binary (fallback)
+  block:
+    - name: Download binary tarball
+      ansible.builtin.get_url:
+        url: "https://github.com/gen0sec/synapse/releases/download/v{{ synapse_version }}/synapse-{{ synapse_arch }}-unknown-linux-gnu.tar.gz"
+        dest: "/tmp/synapse-{{ synapse_arch }}-unknown-linux-gnu.tar.gz"
+        mode: '0644'
+
+    - name: Extract binary
+      ansible.builtin.unarchive:
+        src: "/tmp/synapse-{{ synapse_arch }}-unknown-linux-gnu.tar.gz"
+        dest: /usr/local/bin
+        remote_src: yes
+        mode: '0755'
+
+    - name: Set installation method fact
+      ansible.builtin.set_fact:
+        synapse_installed: true
+        synapse_install_method: "binary"
+  when: synapse_installed is not defined or synapse_installed != true
+
+- name: Download systemd service file
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/{{ synapse_branch }}/others/systemd/synapse.service"
+    dest: /etc/systemd/system/synapse.service
+    mode: '0644'
+
+- name: Reload systemd daemon after service installation
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Create synapse directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/log/synapse
+    - /var/run/synapse
+    - /var/lib/synapse
+    - /etc/synapse
+
+- name: Download config.yaml (binary installation only)
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/{{ synapse_branch }}/config_example.yaml"
+    dest: /etc/synapse/config.yaml
+    mode: '0640'
+  when: synapse_install_method | default('binary') == 'binary'
+
+- name: Download upstreams.yaml (binary installation only)
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/{{ synapse_branch }}/upstreams_example.yaml"
+    dest: /etc/synapse/upstreams.yaml
+    mode: '0644'
+  when: synapse_install_method | default('binary') == 'binary'
+
+- name: Set API key in config (if provided)
+  ansible.builtin.lineinfile:
+    path: /etc/synapse/config.yaml
+    regexp: '^api_key:'
+    line: "api_key: {{ synapse_api_key }}"
+    state: present
+  when: synapse_api_key != ""
+
+- name: Enable synapse service
+  ansible.builtin.systemd:
+    name: synapse
+    enabled: yes
+    daemon_reload: yes

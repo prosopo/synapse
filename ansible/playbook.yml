@@ -1,0 +1,35 @@
+---
+- name: Install and configure synapse
+  hosts: all
+  become: true
+  vars:
+    synapse_version: "0.3.2"
+    synapse_branch: "main"
+    synapse_api_key: ""  # Set this via -e synapse_api_key=your_key or in group_vars/host_vars
+    # Optional services
+    clamav_enabled: true  # Set to false to disable ClamAV installation
+    redis_enabled: true   # Set to false to disable Redis installation
+    # Fail2Ban integration (optional)
+    fail2ban_enabled: false  # Set to true to enable Fail2Ban integration
+    gen0sec_api_token: ""  # Fail2Ban API token (defaults to synapse_api_key if not set)
+    gen0sec_expiration: 600  # Block expiration time in seconds (default: 10 minutes)
+    fail2ban_jail_enabled: true
+    fail2ban_backend: systemd  # Use 'auto' for automatic detection
+
+  roles:
+    - synapse
+    - role: fail2ban
+      when: fail2ban_enabled | bool
+
+  post_tasks:
+    - name: Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "Synapse {{ synapse_version }} installed successfully using {{ synapse_install_method | default('binary') }} method"
+          - "Service is enabled but not started"
+          - "Before starting the service, ensure your API key is set in /etc/synapse/config.yaml"
+          - "You can get your API key from https://dash.gen0sec.com/settings/api-keys"
+          - "Then run 'systemctl start synapse' to start the service"
+          - "ClamAV: {{ 'enabled' if clamav_enabled | bool else 'disabled' }}"
+          - "Redis: {{ 'enabled' if redis_enabled | bool else 'disabled' }}"
+          - "Fail2Ban integration: {{ 'enabled' if fail2ban_enabled | bool else 'disabled' }}"

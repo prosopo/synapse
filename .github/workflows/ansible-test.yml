@@ -1,0 +1,334 @@
+name: Ansible Installation Test
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ansible-test-ubuntu:
+    name: Test Ansible Playbook on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Build systemd-enabled Ubuntu image for testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > /tmp/Dockerfile.ubuntu-systemd << 'EOF'
+          FROM ubuntu:latest
+          RUN apt-get update && \
+              apt-get install -y systemd systemd-sysv dbus curl python3 python3-pip sudo && \
+              apt-get clean && \
+              rm -rf /var/lib/apt/lists/*
+          # Create a user for ansible
+          RUN useradd -m -s /bin/bash ansible && \
+              echo "ansible ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          CMD ["/usr/lib/systemd/systemd"]
+          EOF
+          docker build -t ubuntu-systemd -f /tmp/Dockerfile.ubuntu-systemd /tmp
+
+      - name: Start Ubuntu systemd container for testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker run -d --name ansible-ubuntu-test \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+            --tmpfs /run \
+            --tmpfs /run/lock \
+            --tmpfs /tmp:exec \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            ubuntu-systemd
+          # Wait for systemd to come up
+          sleep 5
+          for i in {1..30}; do
+            if docker exec ansible-ubuntu-test systemctl is-system-running --wait >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec ansible-ubuntu-test systemctl is-system-running || true
+
+      - name: Install Ansible in container
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-ubuntu-test bash -c '
+            apt-get update && \
+            apt-get install -y python3-pip && \
+            pip3 install ansible
+          '
+
+      - name: Copy Ansible playbook to writable location
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-ubuntu-test bash -c '
+            mkdir -p /tmp/ansible
+            cp -r /workspace/ansible/* /tmp/ansible/ 2>/dev/null || true
+            # Create hosts file
+            cat > /tmp/ansible/hosts << EOF
+          localhost ansible_connection=local
+          EOF
+            # Create ansible.cfg
+            cat > /tmp/ansible/ansible.cfg << EOF
+          [defaults]
+          inventory = hosts
+          host_key_checking = False
+          retry_files_enabled = False
+          [privilege_escalation]
+          become = True
+          become_method = sudo
+          become_user = root
+          become_ask_pass = False
+          EOF
+          '
+
+      - name: Run Ansible playbook (Ubuntu)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec -w /tmp/ansible ansible-ubuntu-test bash -c '
+            ansible-playbook playbook.yml \
+              -e synapse_version="0.3.2" \
+              -e synapse_branch="main" \
+              -e clamav_enabled=true \
+              -e redis_enabled=true \
+              -e fail2ban_enabled=false
+          '
+
+      - name: Verify Synapse installation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-ubuntu-test bash -c '
+            # Check if synapse binary exists
+            if [ -f /usr/local/bin/synapse ] || command -v synapse >/dev/null 2>&1; then
+              echo "✓ Synapse binary found"
+            else
+              echo "✗ Synapse binary not found"
+              exit 1
+            fi
+            # Check if service file exists
+            if [ -f /etc/systemd/system/synapse.service ]; then
+              echo "✓ Synapse service file found"
+            else
+              echo "✗ Synapse service file not found"
+              exit 1
+            fi
+            # Check if config directory exists
+            if [ -d /etc/synapse ]; then
+              echo "✓ Synapse config directory found"
+            else
+              echo "✗ Synapse config directory not found"
+              exit 1
+            fi
+            # Check if service is enabled
+            if systemctl is-enabled synapse >/dev/null 2>&1; then
+              echo "✓ Synapse service is enabled"
+            else
+              echo "✗ Synapse service is not enabled"
+              exit 1
+            fi
+          '
+
+      - name: Verify ClamAV installation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-ubuntu-test bash -c '
+            if systemctl is-active clamav-daemon >/dev/null 2>&1 || systemctl is-enabled clamav-daemon >/dev/null 2>&1; then
+              echo "✓ ClamAV is installed and configured"
+            else
+              echo "✗ ClamAV is not properly configured"
+              exit 1
+            fi
+          '
+
+      - name: Verify Redis installation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-ubuntu-test bash -c '
+            if command -v redis-server >/dev/null 2>&1; then
+              echo "✓ Redis is installed"
+            else
+              echo "✗ Redis is not installed"
+              exit 1
+            fi
+          '
+
+      - name: Cleanup Ubuntu container
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker rm -f ansible-ubuntu-test
+
+  ansible-test-fedora:
+    name: Test Ansible Playbook on Fedora
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Build systemd-enabled Fedora image for testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > /tmp/Dockerfile.fedora-systemd << 'EOF'
+          FROM fedora:latest
+          RUN dnf install -y systemd systemd-libs python3 python3-pip sudo && \
+              dnf clean all
+          # Create a user for ansible
+          RUN useradd -m -s /bin/bash ansible && \
+              echo "ansible ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          CMD ["/usr/lib/systemd/systemd"]
+          EOF
+          docker build -t fedora-systemd -f /tmp/Dockerfile.fedora-systemd /tmp
+
+      - name: Start Fedora systemd container for testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker run -d --name ansible-fedora-test \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            --tmpfs /run \
+            --tmpfs /run/lock \
+            --tmpfs /tmp:exec \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            fedora-systemd
+          # Wait for systemd to come up
+          sleep 5
+          for i in {1..30}; do
+            if docker exec ansible-fedora-test systemctl is-system-running --wait >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec ansible-fedora-test systemctl is-system-running || true
+
+      - name: Install Ansible in container
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-fedora-test bash -c '
+            dnf install -y python3-pip && \
+            pip3 install ansible
+          '
+
+      - name: Copy Ansible playbook to writable location
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-fedora-test bash -c '
+            mkdir -p /tmp/ansible
+            cp -r /workspace/ansible/* /tmp/ansible/ 2>/dev/null || true
+            # Create hosts file
+            cat > /tmp/ansible/hosts << EOF
+          localhost ansible_connection=local
+          EOF
+            # Create ansible.cfg
+            cat > /tmp/ansible/ansible.cfg << EOF
+          [defaults]
+          inventory = hosts
+          host_key_checking = False
+          retry_files_enabled = False
+          [privilege_escalation]
+          become = True
+          become_method = sudo
+          become_user = root
+          become_ask_pass = False
+          EOF
+          '
+
+      - name: Run Ansible playbook (Fedora)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec -w /tmp/ansible ansible-fedora-test bash -c '
+            ansible-playbook playbook.yml \
+              -e synapse_version="0.3.2" \
+              -e synapse_branch="main" \
+              -e clamav_enabled=true \
+              -e redis_enabled=true \
+              -e fail2ban_enabled=false
+          '
+
+      - name: Verify Synapse installation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-fedora-test bash -c '
+            # Check if synapse binary exists
+            if [ -f /usr/local/bin/synapse ] || command -v synapse >/dev/null 2>&1; then
+              echo "✓ Synapse binary found"
+            else
+              echo "✗ Synapse binary not found"
+              exit 1
+            fi
+            # Check if service file exists
+            if [ -f /etc/systemd/system/synapse.service ]; then
+              echo "✓ Synapse service file found"
+            else
+              echo "✗ Synapse service file not found"
+              exit 1
+            fi
+            # Check if config directory exists
+            if [ -d /etc/synapse ]; then
+              echo "✓ Synapse config directory found"
+            else
+              echo "✗ Synapse config directory not found"
+              exit 1
+            fi
+            # Check if service is enabled
+            if systemctl is-enabled synapse >/dev/null 2>&1; then
+              echo "✓ Synapse service is enabled"
+            else
+              echo "✗ Synapse service is not enabled"
+              exit 1
+            fi
+          '
+
+      - name: Verify ClamAV installation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-fedora-test bash -c '
+            if systemctl is-active clamav-daemon >/dev/null 2>&1 || systemctl is-enabled clamav-daemon >/dev/null 2>&1; then
+              echo "✓ ClamAV is installed and configured"
+            else
+              echo "✗ ClamAV is not properly configured"
+              exit 1
+            fi
+          '
+
+      - name: Verify Redis installation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-fedora-test bash -c '
+            if command -v redis-server >/dev/null 2>&1 || command -v redis >/dev/null 2>&1; then
+              echo "✓ Redis is installed"
+            else
+              echo "✗ Redis is not installed"
+              exit 1
+            fi
+          '
+
+      - name: Cleanup Fedora container
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker rm -f ansible-fedora-test

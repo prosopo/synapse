@@ -1,0 +1,7 @@
+---
+# Default variables for synapse role
+synapse_version: "0.3.2"
+synapse_branch: "main"
+synapse_api_key: ""
+clamav_enabled: true  # Set to false to disable ClamAV installation
+redis_enabled: true   # Set to false to disable Redis installation

@@ -1,0 +1,7 @@
+---
+# Default variables for fail2ban role
+fail2ban_enabled: false
+gen0sec_api_token: ""
+gen0sec_expiration: 600
+fail2ban_jail_enabled: true
+fail2ban_backend: systemd
