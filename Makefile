@@ -26,7 +26,10 @@ release:
 	DATE=$$(date -R); \
 	CHANGELOG_ENTRY="synapse ($$VERSION-1) stable; urgency=medium\n\n  * Release synapse $$VERSION\n  * More info: https://github.com/gen0sec/synapse/releases\n\n -- Gen0Sec <support@gen0sec.com>  $$DATE"; \
 	printf "$$CHANGELOG_ENTRY\n\n" | cat - pkg/deb/debian/changelog > pkg/deb/debian/changelog.tmp && mv pkg/deb/debian/changelog.tmp pkg/deb/debian/changelog; \
-	git add Cargo.toml Cargo.lock install.sh pkg/deb/debian/changelog; \
+	RPM_DATE=$$(date "+%a %b %d %Y"); \
+	RPM_CHANGELOG_ENTRY="* $$RPM_DATE Gen0Sec <support@gen0sec.com> - $$VERSION-1\n- Release synapse $$VERSION\n- More info: https://github.com/gen0sec/synapse/releases"; \
+	awk -v entry="$$RPM_CHANGELOG_ENTRY" '/^%changelog$$/ {print; print ""; print entry; next} {print}' pkg/rpm/synapse.spec > pkg/rpm/synapse.spec.tmp && mv pkg/rpm/synapse.spec.tmp pkg/rpm/synapse.spec; \
+	git add Cargo.toml Cargo.lock install.sh pkg/deb/debian/changelog pkg/rpm/synapse.spec; \
 	git commit -m "chore: release synapse $$VERSION"; \
 	git tag v$$VERSION; \
 	git push origin main; \
