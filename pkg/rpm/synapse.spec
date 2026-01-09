@@ -16,6 +16,7 @@ Packager:    Gen0Sec <support@gen0sec.com>
 AutoReqProv: no
 ExclusiveOS: linux
 Requires: openssl
+BuildRequires: openssl-devel, perl, gcc, make
 
 %description
 Synapse is a high-performance reverse proxy and firewall built with Rust, featuring
@@ -35,6 +36,9 @@ fi
 
 %build
 source $HOME/.cargo/env
+export OPENSSL_DIR=%{_prefix}
+export OPENSSL_STATIC=0
+export PKG_CONFIG_ALLOW_CROSS=1
 cargo build --release
 
 # -----------------------------------------------------------------------------
@@ -145,6 +149,10 @@ rm -fr %{buildroot}
 # -----------------------------------------------------------------------------
 
 %changelog
+
+* Fri Jan 09 2026 Gen0Sec <support@gen0sec.com> - 0.3.1-1
+- Release synapse 0.3.1
+- More info: https://github.com/gen0sec/synapse/releases
 * Wed Jan 01 2025 Gen0Sec <support@gen0sec.com> - 0.2.4
 - Initial Synapse RPM package
 - More info: https://github.com/gen0sec/synapse/releases

@@ -1,3 +1,10 @@
+synapse (0.3.1-1) stable; urgency=medium
+
+  * Release synapse 0.3.1
+  * More info: https://github.com/gen0sec/synapse/releases
+
+ -- Gen0Sec <support@gen0sec.com>  Fri, 09 Jan 2026 11:26:55 +0100
+
 synapse (0.3.0-1) stable; urgency=medium
 
   * Release synapse 0.3.0
