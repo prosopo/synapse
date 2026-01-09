@@ -93,7 +93,7 @@ jobs:
           docker exec ansible-ubuntu-test bash -c '
             apt-get update && \
             apt-get install -y python3-pip && \
-            pip3 install ansible
+            pip3 install --break-system-packages ansible
           '
 
       - name: Copy Ansible playbook to writable location
@@ -334,7 +334,7 @@ jobs:
         run: |
           set -euxo pipefail
           docker exec ansible-fedora-test bash -c '
-            if systemctl is-active clamav-daemon >/dev/null 2>&1 || systemctl is-enabled clamav-daemon >/dev/null 2>&1; then
+            if systemctl is-active clamd@scan >/dev/null 2>&1 || systemctl is-enabled clamd@scan >/dev/null 2>&1; then
               echo "✓ ClamAV is installed and configured"
             else
               echo "✗ ClamAV is not properly configured"
