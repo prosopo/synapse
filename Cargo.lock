@@ -2433,7 +2433,7 @@ dependencies = [
  "clap 4.5.53",
  "libbpf-rs",
  "libbpf-sys",
- "memmap2",
+ "memmap2 0.5.10",
  "serde",
  "serde_json",
  "tempfile",
@@ -2605,6 +2605,15 @@ name = "memmap2"
 version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "744133e4a0e0a658e1374cf3bf8e415c4052a15a111acd372764c55b4177d490"
 dependencies = [
  "libc",
 ]
@@ -4627,7 +4636,7 @@ dependencies = [
  "local-ip-address",
  "log",
  "maxminddb",
- "memmap2",
+ "memmap2 0.9.9",
  "mimalloc",
  "multer",
  "native-tls",
