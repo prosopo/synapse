@@ -623,7 +623,15 @@ impl HttpAccessLog {
 
         // Populate threat intelligence data if available and meaningful
         if let Some(threat) = threat_data {
-            // Only include threat data if it's meaningful (not just default/empty values)
+            // Always populate GeoIP fields (country, ASN) when available, regardless of threat score
+            // These are geographic/network identifiers that should always be included
+            let country_code = threat.context.geo.iso_code.clone();
+            remediation.ip_country = Some(country_code);
+            remediation.ip_asn = Some(threat.context.asn);
+            remediation.ip_asn_org = Some(threat.context.org.clone());
+            remediation.ip_asn_country = Some(threat.context.geo.asn_iso_code.clone());
+
+            // Only include threat-specific data if it's meaningful (not just default/empty values)
             if has_meaningful_threat_data {
                 remediation.threat_score = Some(threat.intel.score);
                 remediation.threat_confidence = Some(threat.intel.confidence);
@@ -632,20 +640,15 @@ impl HttpAccessLog {
                 remediation.threat_reason_code = Some(threat.intel.reason_code.clone());
                 remediation.threat_reason_summary = Some(threat.intel.reason_summary.clone());
                 remediation.threat_advice = Some(threat.advice.clone());
-                // Use iso_code directly from threat response
-                let country_code = threat.context.geo.iso_code.clone();
-                remediation.ip_country = Some(country_code);
-                remediation.ip_asn = Some(threat.context.asn);
-                remediation.ip_asn_org = Some(threat.context.org.clone());
-                remediation.ip_asn_country = Some(threat.context.geo.asn_iso_code.clone());
             }
         }
 
-        // Only return remediation if it has any meaningful data (WAF fields for Block/Challenge or meaningful threat data)
+        // Only return remediation if it has any meaningful data (WAF fields for Block/Challenge, meaningful threat data, or GeoIP data)
         let has_waf_data = remediation.waf_action.is_some();
         let has_threat_data = remediation.threat_score.is_some() || remediation.threat_reason_code.is_some();
+        let has_geoip_data = remediation.ip_country.is_some() || remediation.ip_asn.is_some();
 
-        if has_waf_data || has_threat_data {
+        if has_waf_data || has_threat_data || has_geoip_data {
             Some(remediation)
         } else {
             None

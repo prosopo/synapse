@@ -1,0 +1,204 @@
+# Upstreams Configuration for Pingora Proxy
+# This file is watched and hot-reloaded - changes apply immediately without restart
+#
+# Schema Version: New format with nested config: section
+# This file demonstrates all available configuration options
+#
+# ACME Certificate Management:
+# - If a certificate is not found in Redis for a domain, it will be automatically
+#   requested from the embedded ACME server (if enabled in config.yaml)
+# - Challenge types: "http-01" (default) or "dns-01" (for wildcard domains)
+# - Wildcard domains (*.example.com) automatically use DNS-01 challenge
+# - Configure challenge type per domain using the "acme" section below
+
+# Provider type: "file", "consul", or "kubernetes"
+provider: "file"
+
+# Global configuration section (new format)
+config:
+  # Enable HTTPS proxy redirects globally
+  force_https: false
+
+  # Enable sticky sessions (session affinity) globally
+  sticky_sessions: false
+
+  # Global rate limit (requests per second) - applies to all upstreams unless overridden
+  global_rate_limit: 100
+
+  # Global headers to add to all responses
+  global_headers:
+    - "Access-Control-Allow-Origin:*"
+    - "Access-Control-Allow-Methods:POST, GET, OPTIONS"
+    - "Access-Control-Max-Age:86400"
+    - "Strict-Transport-Security:max-age=31536000; includeSubDomains; preload"
+    - "X-Content-Type-Options:nosniff"
+    - "X-Frame-Options:DENY"
+    - "X-XSS-Protection:1; mode=block"
+
+  # Upstream health check configuration
+  # Health check interval in seconds (how often to check upstream servers)
+  healthcheck_interval: 30
+  # HTTP method to use for health checks (GET, HEAD, POST, etc.)
+  healthcheck_method: "GET"
+
+# Gen0Sec paths - Global paths that work across ALL hostnames
+# These paths are evaluated BEFORE hostname-specific routing
+# Perfect for common endpoints like captcha verification, health checks, APIs, etc.
+arxignis_paths:
+  # Example: Captcha verification endpoint (handled by dedicated service)
+  "/cgi-bin/captcha/verify":
+    rate_limit: 200
+    force_https: false
+    ssl_enabled: false
+    servers:
+      - "127.0.0.1:3001"
+
+  # ACME challenge endpoint - routes to embedded ACME server
+  # The embedded ACME server listens on a separate internal port (default: 127.0.0.1:8088)
+  "/.well-known/acme-challenge/*":
+    rate_limit: 200
+    force_https: false
+    ssl_enabled: false
+    servers:
+      - "127.0.0.1:8088"  # Embedded ACME server internal port
+
+# Upstream servers configuration
+# Format: hostname -> paths -> servers
+upstreams:
+  # Example 1: Simple service with single path
+  example.com:
+    # Certificate name (without .crt/.key extension) in the certificate directory
+    # If not specified, no TLS certificate will be used for this hostname
+    certificate: "example.com"
+
+    # ACME certificate configuration (optional)
+    # If certificate is missing in Redis, it will be automatically requested from ACME server
+    acme:
+      # Challenge type: "http-01" or "dns-01"
+      # Default: "http-01" for regular domains, "dns-01" for wildcard domains (*.example.com)
+      challenge_type: "http-01"
+      # Email for ACME account (optional, uses global ACME email if not set)
+      email: "admin@example.com"
+
+    paths:
+      "/":
+        # Rate limit for this specific path (overrides global rate limit)
+        rate_limit: 200
+
+        # Enable HTTPS redirect for this path (overrides global setting)
+        force_https: false
+        ssl_enabled: true
+        http2_enabled: true
+
+        # Custom headers for this path (merged with global headers)
+        headers:
+          - "X-Proxy-From:Synapse"
+          - "X-Forwarded-Proto:https"
+
+        # Backend servers (load balanced)
+        servers:
+          - "127.0.0.1:8000"
+          - "127.0.0.1:8001"
+          - "127.0.0.1:8002"
+
+  # Example 2: Multi-path service with different configurations
+  api.example.com:
+    certificate: "api_example_com"
+
+    # ACME configuration with DNS-01 challenge (for wildcard or manual DNS setup)
+    acme:
+      challenge_type: "dns-01"
+      email: "admin@example.com"
+
+    paths:
+      # API root path
+      "/":
+        rate_limit: 500
+        force_https: true
+        headers:
+          - "X-API-Version:v1"
+        servers:
+          - "127.0.0.1:9000"
+          - "127.0.0.1:9001"
+
+      # Health check endpoint (no rate limit)
+      "/health":
+        rate_limit: 1000
+        force_https: false
+        headers:
+          - "Cache-Control:no-cache"
+        servers:
+          - "127.0.0.1:9000"
+
+      # Admin endpoint with higher rate limit
+      "/admin":
+        rate_limit: 50
+        force_https: true
+        headers:
+          - "X-Admin-Access:true"
+        servers:
+          - "127.0.0.1:9002"
+
+  # Example 3: Wildcard domain (automatically uses DNS-01 challenge)
+  "*.example.com":
+    certificate: "wildcard_example_com"
+
+    # ACME configuration for wildcard domain
+    # Note: Wildcard domains require DNS-01 challenge
+    acme:
+      challenge_type: "dns-01"  # Required for wildcard domains
+      email: "admin@example.com"
+      wildcard: true
+
+    paths:
+      "/":
+        rate_limit: 200
+        force_https: true
+        servers:
+          - "127.0.0.1:8000"
+
+  # Example 4: Service without certificate (HTTP only)
+  localhost:
+    paths:
+      "/":
+        rate_limit: 100
+        force_https: false
+        # Enable health checks for this path
+        healthcheck: true
+        headers:
+          - "X-Local-Service:true"
+        servers:
+          - "127.0.0.1:8080"
+
+  # Example 5: Service with host-level rate limit
+  high-traffic.example.com:
+    # Host-level rate limit (applies to all paths unless overridden)
+    rate_limit: 1000
+    certificate: "high_traffic_example_com"
+
+    # ACME configuration (optional - will auto-detect if not specified)
+    # If omitted, uses "http-01" for regular domains, "dns-01" for wildcard domains
+    acme:
+      challenge_type: "http-01"
+
+    paths:
+      "/":
+        # Path inherits host-level rate limit (1000)
+        force_https: true
+        headers:
+          - "X-High-Traffic:true"
+        servers:
+          - "10.0.0.1:80"
+          - "10.0.0.2:80"
+          - "10.0.0.3:80"
+
+      "/static":
+        # Override host-level rate limit for static content
+        rate_limit: 2000
+        force_https: true
+        headers:
+          - "Cache-Control:public, max-age=31536000"
+        servers:
+          - "10.0.0.1:80"
+          - "10.0.0.2:80"
+          - "10.0.0.3:80"

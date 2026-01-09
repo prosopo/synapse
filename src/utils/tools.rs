@@ -7,7 +7,6 @@ use notify::{event::ModifyKind, Config, EventKind, RecommendedWatcher, Recursive
 use port_check::is_port_reachable;
 use privdrop::PrivDrop;
 use sha2::{Digest, Sha256};
-use std::any::type_name;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::net::SocketAddr;
@@ -42,23 +41,6 @@ pub fn print_upstreams(upstreams: &UpstreamsDashMap) {
     }
 }
 
-#[allow(dead_code)]
-pub fn typeoff<T>(_: T) {
-    let to = type_name::<T>();
-    println!("{:?}", to);
-}
-
-#[allow(dead_code)]
-pub fn string_to_bool(val: Option<&str>) -> Option<bool> {
-    match val {
-        Some(v) => match v {
-            "yes" => Some(true),
-            "true" => Some(true),
-            _ => Some(false),
-        },
-        None => Some(false),
-    }
-}
 
 pub fn clone_dashmap(original: &UpstreamsDashMap) -> UpstreamsDashMap {
     let new_map: UpstreamsDashMap = DashMap::new();
