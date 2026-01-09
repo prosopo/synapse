@@ -36,26 +36,34 @@ jobs:
       - name: Check out repository code, branch='${{ github.ref }}'
         uses: actions/checkout@v4
 
-      - name: Build systemd-enabled Fedora image
+      - name: Build RPM using release Dockerfile
         shell: bash
         run: |
           set -euxo pipefail
-          
-          # Create a Dockerfile for systemd-enabled Fedora
+          mkdir -p /tmp/rpm-build-output
+          docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile pkg/rpm/docker/
+          docker run -v "${GITHUB_WORKSPACE}:/tmp/repo:ro" -v /tmp/rpm-build-output:/tmp/output --rm synapse-builder-rpm:latest
+
+      - name: Build systemd-enabled Fedora image for testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Create a Dockerfile for systemd-enabled Fedora (minimal, just for testing)
           cat > /tmp/Dockerfile.fedora-systemd << 'EOF'
           FROM fedora:latest
           RUN dnf install -y systemd systemd-libs && dnf clean all
           CMD ["/usr/lib/systemd/systemd"]
           EOF
-          
+
           docker build -t fedora-systemd -f /tmp/Dockerfile.fedora-systemd /tmp
 
-      - name: Start Fedora systemd container (PID 1) + install deps
+      - name: Start Fedora systemd container for testing
         shell: bash
         run: |
           set -euxo pipefail
 
-          # Start systemd as PID 1 
+          # Start systemd as PID 1
           docker run -d --name synapse-rpm-test \
             --privileged \
             --cgroupns=host \
@@ -63,8 +71,7 @@ jobs:
             --tmpfs /run \
             --tmpfs /run/lock \
             --tmpfs /tmp:exec \
-            -v "${GITHUB_WORKSPACE}:/workspace:rw" \
-            -w /workspace \
+            -v /tmp/rpm-build-output:/workspace/rpm:ro \
             fedora-systemd
 
           # Wait for systemd to come up
@@ -77,28 +84,12 @@ jobs:
           done
           docker exec synapse-rpm-test systemctl is-system-running || true
 
-          # Install build/runtime deps inside the RPM OS
-          docker exec synapse-rpm-test bash -lc '
-            dnf install -y git rpm-build tar gcc openssl-devel cmake clang llvm elfutils-libelf-devel libzstd-devel perl perl-IPC-Cmd curl
-            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          '
-
-      - name: Build RPM inside Fedora
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker exec synapse-rpm-test bash -lc '
-            export PATH="$HOME/.cargo/bin:$PATH"
-            cd /workspace/pkg/rpm
-            ./builder.sh
-          '
-
       - name: Install RPM inside Fedora
         shell: bash
         run: |
           set -euxo pipefail
           docker exec synapse-rpm-test bash -lc '
-            cd /workspace/pkg/rpm
+            cd /workspace/rpm
             dnf install -y ./synapse*.rpm
           '
 
