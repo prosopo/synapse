@@ -1,7 +1,7 @@
 ---
 - name: Detect architecture
   ansible.builtin.set_fact:
-    synapse_arch: "{{ ansible_architecture }}"
+    synapse_arch: "{{ ansible_facts['architecture'] }}"
   when: synapse_arch is not defined
 
 - name: Map architecture names
@@ -50,19 +50,36 @@
     - redis_enabled | bool
     - ansible_facts["os_family"] == 'RedHat'
 
+- name: Set ClamAV config directory
+  ansible.builtin.set_fact:
+    clamav_config_dir: "/etc/clamav"
+    clamav_config_file: "/etc/clamav/clamd.conf"
+  when:
+    - clamav_enabled | bool
+    - ansible_facts["os_family"] == 'Debian'
+
+- name: Set ClamAV config directory (Fedora/RHEL)
+  ansible.builtin.set_fact:
+    clamav_config_dir: "/etc/clamd.d"
+    clamav_config_file: "/etc/clamd.d/scan.conf"
+  when:
+    - clamav_enabled | bool
+    - ansible_facts["os_family"] == 'RedHat'
+
 - name: Create ClamAV directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0755'
   loop:
+    - "{{ clamav_config_dir | default('/etc/clamav') }}"
     - /etc/systemd/system/clamav-daemon.socket.d
   when: clamav_enabled | bool
 
 - name: Download ClamAV configuration
   ansible.builtin.get_url:
     url: "https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/{{ synapse_branch }}/others/clamd/clamd.conf"
-    dest: /etc/clamav/clamd.conf
+    dest: "{{ clamav_config_file | default('/etc/clamav/clamd.conf') }}"
     mode: '0644'
   when: clamav_enabled | bool
 

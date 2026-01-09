@@ -30,7 +30,9 @@ jobs:
           # Create a user for ansible
           RUN useradd -m -s /bin/bash ansible && \
               echo "ansible ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          CMD ["/usr/lib/systemd/systemd"]
+          # Prevent systemd from exiting
+          RUN systemctl set-default multi-user.target || true
+          CMD ["/usr/lib/systemd/systemd", "--system"]
           EOF
           docker build -t ubuntu-systemd -f /tmp/Dockerfile.ubuntu-systemd /tmp
 
@@ -41,26 +43,53 @@ jobs:
           docker run -d --name ansible-ubuntu-test \
             --privileged \
             --cgroupns=host \
-            -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             --tmpfs /run \
             --tmpfs /run/lock \
             --tmpfs /tmp:exec \
             -v "${GITHUB_WORKSPACE}:/workspace:ro" \
             ubuntu-systemd
+          # Wait for container to be running
+          sleep 3
+          for i in {1..10}; do
+            if docker ps | grep -q ansible-ubuntu-test; then
+              echo "Container is running"
+              break
+            fi
+            echo "Waiting for container to start... ($i/10)"
+            sleep 1
+          done
+          # Check if container is still running
+          if ! docker ps | grep -q ansible-ubuntu-test; then
+            echo "Container failed to start. Logs:"
+            docker logs ansible-ubuntu-test || true
+            exit 1
+          fi
           # Wait for systemd to come up
           sleep 5
           for i in {1..30}; do
             if docker exec ansible-ubuntu-test systemctl is-system-running --wait >/dev/null 2>&1; then
+              echo "Systemd is running"
               break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Systemd failed to start. Container logs:"
+              docker logs ansible-ubuntu-test || true
+              docker exec ansible-ubuntu-test systemctl is-system-running || true
             fi
             sleep 1
           done
-          docker exec ansible-ubuntu-test systemctl is-system-running || true
 
       - name: Install Ansible in container
         shell: bash
         run: |
           set -euxo pipefail
+          # Verify container is still running
+          if ! docker ps | grep -q ansible-ubuntu-test; then
+            echo "Container is not running. Logs:"
+            docker logs ansible-ubuntu-test || true
+            exit 1
+          fi
           docker exec ansible-ubuntu-test bash -c '
             apt-get update && \
             apt-get install -y python3-pip && \
