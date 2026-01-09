@@ -205,24 +205,23 @@ async fn sync_mmdb(
 
         log::debug!("No versions URL provided, downloading directly from {}", mmdb_base_url);
 
-        let bytes = if mmdb_base_url.starts_with("http://") || mmdb_base_url.starts_with("https://") {
-            download_mmdb(mmdb_base_url, headers.as_ref()).await?
+        if mmdb_base_url.starts_with("http://") || mmdb_base_url.starts_with("https://") {
+            // Stream directly to final location to avoid loading entire file into memory
+            download_mmdb_to_file(mmdb_base_url, &local_path, headers.as_ref()).await?;
         } else {
+            // For file:// URLs, copy from source to destination
             let src_path = PathBuf::from(mmdb_base_url);
-            tokio::fs::read(&src_path)
-                .await
-                .with_context(|| format!("Failed to read MMDB from {:?}", src_path))?
-        };
 
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
+            if let Some(parent) = local_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .with_context(|| format!("Failed to create MMDB directory {:?}", parent))?;
+            }
+
+            tokio::fs::copy(&src_path, &local_path)
                 .await
-                .with_context(|| format!("Failed to create MMDB directory {:?}", parent))?;
+                .with_context(|| format!("Failed to copy MMDB from {:?} to {:?}", src_path, local_path))?;
         }
-
-        tokio::fs::write(&local_path, &bytes)
-            .await
-            .with_context(|| format!("Failed to write MMDB to {:?}", local_path))?;
 
         log::info!("GeoIP MMDB written to {:?}", local_path);
         return Ok(Some("direct".to_string()));
@@ -267,25 +266,24 @@ async fn sync_mmdb(
     }
 
     let base = mmdb_base_url.trim_end_matches('/');
-    let bytes = if base.starts_with("http://") || base.starts_with("https://") {
+    if base.starts_with("http://") || base.starts_with("https://") {
+        // Stream directly to final location to avoid loading entire file into memory
         let url = format!("{}/{}", base, latest);
-        download_mmdb(&url, headers.as_ref()).await?
+        download_mmdb_to_file(&url, &local_path, headers.as_ref()).await?;
     } else {
+        // For file:// URLs, copy from source to destination
         let src_path = PathBuf::from(base).join(&latest);
-        tokio::fs::read(&src_path)
-            .await
-            .with_context(|| format!("Failed to read MMDB from {:?}", src_path))?
-    };
 
-    if let Some(parent) = local_path.parent() {
-        tokio::fs::create_dir_all(parent)
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("Failed to create MMDB directory {:?}", parent))?;
+        }
+
+        tokio::fs::copy(&src_path, &local_path)
             .await
-            .with_context(|| format!("Failed to create MMDB directory {:?}", parent))?;
+            .with_context(|| format!("Failed to copy MMDB from {:?} to {:?}", src_path, local_path))?;
     }
-
-    tokio::fs::write(&local_path, &bytes)
-        .await
-        .with_context(|| format!("Failed to write MMDB to {:?}", local_path))?;
 
     log::info!("GeoIP MMDB written to {:?}", local_path);
     crate::threat::refresh_geoip_mmdb().await?;
@@ -301,20 +299,26 @@ fn parse_latest_version(text: &str) -> Option<String> {
     None
 }
 
-async fn download_mmdb(url: &str, headers: Option<&HashMap<String, String>>) -> Result<Vec<u8>> {
+/// Download MMDB file by streaming directly to disk to avoid OOM on low-memory systems
+async fn download_mmdb_to_file(url: &str, file_path: &PathBuf, headers: Option<&HashMap<String, String>>) -> Result<u64> {
     let client = get_global_reqwest_client()
         .context("Failed to get HTTP client for MMDB download")?;
-    let mut req = client.get(url);
+
+    let timeout_secs = 600; // 10 minutes for large MMDB files
+    let mut req = client.get(url).timeout(Duration::from_secs(timeout_secs));
     if let Some(hdrs) = headers {
         for (key, value) in hdrs {
             req = req.header(key, value);
         }
     }
-    let resp = req
+    let mut resp = req
         .send()
         .await
-        .with_context(|| format!("Failed to download MMDB from {}", url))?;
+        .with_context(|| format!("Failed to download MMDB from {} (timeout: {}s)", url, timeout_secs))?;
     let status = resp.status();
+
+    let content_length = resp.content_length();
+
     if !status.is_success() {
         return Err(anyhow!(
             "MMDB download failed: status {} from {}",
@@ -322,8 +326,61 @@ async fn download_mmdb(url: &str, headers: Option<&HashMap<String, String>>) -> 
             url
         ));
     }
-    let bytes = resp.bytes().await.context("Failed to read MMDB body")?;
-    Ok(bytes.to_vec())
-}
 
+    let file_size_mb = content_length.map(|s| s as f64 / 1_048_576.0);
+    log::info!(
+        "Downloading MMDB from {} (content-length: {:?}, ~{:.2} MB, timeout: {}s) - streaming to disk",
+        url,
+        content_length,
+        file_size_mb.unwrap_or(0.0),
+        timeout_secs
+    );
+
+    // Create parent directory if needed
+    if let Some(parent) = file_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("Failed to create directory {:?}", parent))?;
+    }
+
+    // Stream the response directly to file to avoid loading entire file into memory
+    use tokio::io::AsyncWriteExt;
+
+    let mut file = tokio::fs::File::create(file_path)
+        .await
+        .with_context(|| format!("Failed to create file {:?} for streaming", file_path))?;
+
+    let mut total_bytes = 0u64;
+
+    // Read response in chunks to avoid loading entire file into memory
+    // Use chunk() method which returns Option<Result<Bytes>>
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let len = chunk.len();
+                file.write_all(&chunk)
+                    .await
+                    .with_context(|| format!("Failed to write chunk to file at {} bytes", total_bytes))?;
+                total_bytes += len as u64;
+            }
+            Ok(None) => break, // EOF
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to read chunk from MMDB stream at {} bytes: {}", total_bytes, e));
+            }
+        }
+    }
+
+    file.sync_all()
+        .await
+        .with_context(|| format!("Failed to sync file {:?} to disk", file_path))?;
+
+    log::info!(
+        "Successfully downloaded MMDB from {} (size: {} bytes, ~{:.2} MB)",
+        url,
+        total_bytes,
+        total_bytes as f64 / 1_048_576.0
+    );
+
+    Ok(total_bytes)
+}
 

@@ -501,7 +501,7 @@ impl ThreatClient {
                         match lookup_result.decode::<geoip2::Country>() {
                             Ok(Some(country)) => {
                                 // Debug: Log the raw country data structure
-                                log::info!("🔍 [GeoIP] RAW Country Data for {}: {:?}", ip_clone, country);
+                                log::debug!("🔍 [GeoIP] RAW Country Data for {}: {:?}", ip_clone, country);
 
                                 // Try multiple fields
                                 let iso = country
