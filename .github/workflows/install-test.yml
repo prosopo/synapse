@@ -42,7 +42,7 @@ jobs:
           set -euxo pipefail
           mkdir -p /tmp/rpm-build-output
           docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile pkg/rpm/docker/
-          docker run -v "${GITHUB_WORKSPACE}:/tmp/repo:ro" -v /tmp/rpm-build-output:/tmp/output --rm synapse-builder-rpm:latest
+          docker run -v "${GITHUB_WORKSPACE}:/tmp/repo" -v /tmp/rpm-build-output:/tmp/output --rm synapse-builder-rpm:latest
 
       - name: Build systemd-enabled Fedora image for testing
         shell: bash
