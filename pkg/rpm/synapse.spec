@@ -150,6 +150,10 @@ rm -fr %{buildroot}
 
 %changelog
 
+* Fri Jan 09 2026 Gen0Sec <support@gen0sec.com> - 0.3.2-1
+- Release synapse 0.3.2
+- More info: https://github.com/gen0sec/synapse/releases
+
 * Fri Jan 09 2026 Gen0Sec <support@gen0sec.com> - 0.3.1-1
 - Release synapse 0.3.1
 - More info: https://github.com/gen0sec/synapse/releases

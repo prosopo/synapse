@@ -4608,7 +4608,7 @@ dependencies = [
 
 [[package]]
 name = "synapse"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "actix-files",
  "actix-web",
