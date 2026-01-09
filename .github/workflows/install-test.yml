@@ -5,7 +5,7 @@ on:
       - main
 
 jobs:
-  Build-install-ubuntu:
+  build-install-ubuntu:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code, branch='${{ github.ref }}'
@@ -30,7 +30,7 @@ jobs:
         run: sudo dpkg --purge synapse
 
 
-  Build-install-fedora:
+  build-install-fedora:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code, branch='${{ github.ref }}'
