@@ -8,8 +8,8 @@ synapse_version: "0.3.2"
 # GitHub branch for configuration files
 synapse_branch: "main"
 
-# Gen0Sec API key (required)
-synapse_api_key: "your_api_key_here"
+# Gen0Sec API token (required - used for both synapse and fail2ban)
+gen0sec_api_token: "your_api_key_here"
 
 # Optional services
 clamav_enabled: true  # Set to false to disable ClamAV installation
@@ -17,7 +17,6 @@ redis_enabled: true   # Set to false to disable Redis installation
 
 # Fail2Ban integration (optional)
 fail2ban_enabled: false  # Set to true to enable Fail2Ban integration
-gen0sec_api_token: ""  # Fail2Ban API token (defaults to synapse_api_key if not set)
 gen0sec_expiration: 600  # Block expiration time in seconds (default: 10 minutes)
 fail2ban_jail_enabled: true
 fail2ban_backend: systemd  # Use 'auto' for automatic detection

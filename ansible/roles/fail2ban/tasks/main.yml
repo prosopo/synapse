@@ -1,9 +1,4 @@
 ---
-- name: Set Gen0Sec API token (use synapse API key if not specified)
-  ansible.builtin.set_fact:
-    gen0sec_api_token: "{{ gen0sec_api_token if gen0sec_api_token != '' else (synapse_api_key | default('')) }}"
-  when: gen0sec_api_token == "" and synapse_api_key is defined
-
 - name: Install fail2ban
   ansible.builtin.package:
     name: fail2ban

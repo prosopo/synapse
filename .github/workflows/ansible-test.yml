@@ -4,11 +4,10 @@ on:
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - main
+    paths:
+      - 'ansible/**'
+      - '.github/workflows/ansible-test.yml'
   workflow_dispatch:
-
 jobs:
   ansible-test-ubuntu:
     name: Test Ansible Playbook on Ubuntu
@@ -202,19 +201,19 @@ jobs:
           set +e
           docker rm -f ansible-ubuntu-test
 
-  ansible-test-fedora:
-    name: Test Ansible Playbook on Fedora
+  ansible-test-oracle:
+    name: Test Ansible Playbook on Oracle
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
 
-      - name: Build systemd-enabled Fedora image for testing
+      - name: Build systemd-enabled Oracle image for testing
         shell: bash
         run: |
           set -euxo pipefail
-          cat > /tmp/Dockerfile.fedora-systemd << 'EOF'
-          FROM fedora:latest
+          cat > /tmp/Dockerfile.oracle-systemd << 'EOF'
+          FROM oracle:latest
           RUN dnf install -y systemd systemd-libs python3 python3-pip sudo && \
               dnf clean all
           # Create a user for ansible
@@ -222,13 +221,13 @@ jobs:
               echo "ansible ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           CMD ["/usr/lib/systemd/systemd"]
           EOF
-          docker build -t fedora-systemd -f /tmp/Dockerfile.fedora-systemd /tmp
+          docker build -t oracle-systemd -f /tmp/Dockerfile.oracle-systemd /tmp
 
-      - name: Start Fedora systemd container for testing
+      - name: Start Oracle systemd container for testing
         shell: bash
         run: |
           set -euxo pipefail
-          docker run -d --name ansible-fedora-test \
+          docker run -d --name ansible-oracle-test \
             --privileged \
             --cgroupns=host \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
@@ -236,22 +235,22 @@ jobs:
             --tmpfs /run/lock \
             --tmpfs /tmp:exec \
             -v "${GITHUB_WORKSPACE}:/workspace:ro" \
-            fedora-systemd
+            oracle-systemd
           # Wait for systemd to come up
           sleep 5
           for i in {1..30}; do
-            if docker exec ansible-fedora-test systemctl is-system-running --wait >/dev/null 2>&1; then
+            if docker exec ansible-oracle-test systemctl is-system-running --wait >/dev/null 2>&1; then
               break
             fi
             sleep 1
           done
-          docker exec ansible-fedora-test systemctl is-system-running || true
+          docker exec ansible-oracle-test systemctl is-system-running || true
 
       - name: Install Ansible in container
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec ansible-fedora-test bash -c '
+          docker exec ansible-oracle-test bash -c '
             dnf install -y python3-pip && \
             pip3 install ansible
           '
@@ -260,7 +259,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec ansible-fedora-test bash -c '
+          docker exec ansible-oracle-test bash -c '
             mkdir -p /tmp/ansible
             cp -r /workspace/ansible/* /tmp/ansible/ 2>/dev/null || true
             # Create hosts file
@@ -281,11 +280,11 @@ jobs:
           EOF
           '
 
-      - name: Run Ansible playbook (Fedora)
+      - name: Run Ansible playbook (Oracle)
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec -w /tmp/ansible ansible-fedora-test bash -c '
+          docker exec -w /tmp/ansible ansible-oracle-test bash -c '
             ansible-playbook playbook.yml \
               -e synapse_version="0.3.2" \
               -e synapse_branch="main" \
@@ -298,7 +297,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec ansible-fedora-test bash -c '
+          docker exec ansible-oracle-test bash -c '
             # Check if synapse binary exists
             if [ -f /usr/local/bin/synapse ] || command -v synapse >/dev/null 2>&1; then
               echo "✓ Synapse binary found"
@@ -333,7 +332,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec ansible-fedora-test bash -c '
+          docker exec ansible-oracle-test bash -c '
             if systemctl is-active clamd@scan >/dev/null 2>&1 || systemctl is-enabled clamd@scan >/dev/null 2>&1; then
               echo "✓ ClamAV is installed and configured"
             else
@@ -346,7 +345,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec ansible-fedora-test bash -c '
+          docker exec ansible-oracle-test bash -c '
             if command -v redis-server >/dev/null 2>&1 || command -v redis >/dev/null 2>&1; then
               echo "✓ Redis is installed"
             else
@@ -355,9 +354,9 @@ jobs:
             fi
           '
 
-      - name: Cleanup Fedora container
+      - name: Cleanup Oracle container
         if: always()
         shell: bash
         run: |
           set +e
-          docker rm -f ansible-fedora-test
+          docker rm -f ansible-oracle-test

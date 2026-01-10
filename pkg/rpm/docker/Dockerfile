@@ -1,4 +1,4 @@
-FROM fedora:latest
+FROM oraclelinux:9
 
 RUN dnf update -y && \
     dnf install -y rpm-build tar gcc openssl-devel curl git cmake clang llvm \

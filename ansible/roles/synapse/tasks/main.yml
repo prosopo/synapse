@@ -314,9 +314,9 @@
   ansible.builtin.lineinfile:
     path: /etc/synapse/config.yaml
     regexp: '^api_key:'
-    line: "api_key: {{ synapse_api_key }}"
+    line: "api_key: {{ gen0sec_api_token }}"
     state: present
-  when: synapse_api_key != ""
+  when: gen0sec_api_token != ""
 
 - name: Enable synapse service
   ansible.builtin.systemd:

@@ -30,7 +30,7 @@ jobs:
         run: sudo dpkg --purge synapse
 
 
-  build-install-fedora:
+  build-install-oracle:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code, branch='${{ github.ref }}'
@@ -44,21 +44,21 @@ jobs:
           docker build -t synapse-builder-rpm:latest -f pkg/rpm/docker/Dockerfile pkg/rpm/docker/
           docker run -v "${GITHUB_WORKSPACE}:/tmp/repo" -v /tmp/rpm-build-output:/tmp/output --rm synapse-builder-rpm:latest
 
-      - name: Build systemd-enabled Fedora image for testing
+      - name: Build systemd-enabled Oracle image for testing
         shell: bash
         run: |
           set -euxo pipefail
 
-          # Create a Dockerfile for systemd-enabled Fedora (minimal, just for testing)
-          cat > /tmp/Dockerfile.fedora-systemd << 'EOF'
-          FROM fedora:latest
+          # Create a Dockerfile for systemd-enabled Oracle (minimal, just for testing)
+          cat > /tmp/Dockerfile.oracle-systemd << 'EOF'
+          FROM oracle:latest
           RUN dnf install -y systemd systemd-libs && dnf clean all
           CMD ["/usr/lib/systemd/systemd"]
           EOF
 
-          docker build -t fedora-systemd -f /tmp/Dockerfile.fedora-systemd /tmp
+          docker build -t oracle-systemd -f /tmp/Dockerfile.oracle-systemd /tmp
 
-      - name: Start Fedora systemd container for testing
+      - name: Start Oracle systemd container for testing
         shell: bash
         run: |
           set -euxo pipefail
@@ -72,7 +72,7 @@ jobs:
             --tmpfs /run/lock \
             --tmpfs /tmp:exec \
             -v /tmp/rpm-build-output:/workspace/rpm:ro \
-            fedora-systemd
+            oracle-systemd
 
           # Wait for systemd to come up
           sleep 5
@@ -84,7 +84,7 @@ jobs:
           done
           docker exec synapse-rpm-test systemctl is-system-running || true
 
-      - name: Install RPM inside Fedora
+      - name: Install RPM inside Oracle
         shell: bash
         run: |
           set -euxo pipefail
