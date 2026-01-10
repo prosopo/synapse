@@ -61,6 +61,7 @@
     name:
       - clamav
       - clamav-freshclam
+      - clamd
     state: present
   when:
     - clamav_enabled | bool
@@ -81,6 +82,14 @@
   when:
     - redis_enabled | bool
     - ansible_facts["os_family"] == 'RedHat'
+
+- name: Run freshclam to download initial virus definitions
+  ansible.builtin.command:
+    cmd: freshclam
+  register: freshclam_result
+  changed_when: true
+  failed_when: false
+  when: clamav_enabled | bool
 
 - name: Set ClamAV config directory
   ansible.builtin.set_fact:
