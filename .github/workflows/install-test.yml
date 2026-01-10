@@ -48,15 +48,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
-          # Create a Dockerfile for systemd-enabled Oracle (minimal, just for testing)
-          cat > /tmp/Dockerfile.oracle-systemd << 'EOF'
-          FROM oracle:latest
-          RUN dnf install -y systemd systemd-libs && dnf clean all
-          CMD ["/usr/lib/systemd/systemd"]
-          EOF
-
-          docker build -t oracle-systemd -f /tmp/Dockerfile.oracle-systemd /tmp
+          docker build -t oracle-systemd -f pkg/rpm/docker/test.Dockerfile pkg/rpm/docker/
 
       - name: Start Oracle systemd container for testing
         shell: bash
@@ -90,7 +82,7 @@ jobs:
           set -euxo pipefail
           docker exec synapse-rpm-test bash -lc '
             cd /workspace/rpm
-            dnf install -y ./synapse*.rpm
+            dnf install -y --nogpgcheck ./synapse*.rpm
           '
 
       - name: Start Synapse service

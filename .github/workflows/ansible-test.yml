@@ -20,20 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cat > /tmp/Dockerfile.ubuntu-systemd << 'EOF'
-          FROM ubuntu:latest
-          RUN apt-get update && \
-              apt-get install -y systemd systemd-sysv dbus curl python3 python3-pip sudo && \
-              apt-get clean && \
-              rm -rf /var/lib/apt/lists/*
-          # Create a user for ansible
-          RUN useradd -m -s /bin/bash ansible && \
-              echo "ansible ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          # Prevent systemd from exiting
-          RUN systemctl set-default multi-user.target || true
-          CMD ["/usr/lib/systemd/systemd", "--system"]
-          EOF
-          docker build -t ubuntu-systemd -f /tmp/Dockerfile.ubuntu-systemd /tmp
+          docker build -t ubuntu-systemd -f pkg/deb/docker/test.Dockerfile pkg/deb/docker/
 
       - name: Start Ubuntu systemd container for testing
         shell: bash
@@ -212,16 +199,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cat > /tmp/Dockerfile.oracle-systemd << 'EOF'
-          FROM oracle:latest
-          RUN dnf install -y systemd systemd-libs python3 python3-pip sudo && \
-              dnf clean all
-          # Create a user for ansible
-          RUN useradd -m -s /bin/bash ansible && \
-              echo "ansible ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          CMD ["/usr/lib/systemd/systemd"]
-          EOF
-          docker build -t oracle-systemd -f /tmp/Dockerfile.oracle-systemd /tmp
+          docker build -t oracle-systemd -f pkg/rpm/docker/test.Dockerfile pkg/rpm/docker/
 
       - name: Start Oracle systemd container for testing
         shell: bash
