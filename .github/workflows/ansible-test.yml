@@ -311,8 +311,14 @@ jobs:
         run: |
           set -euxo pipefail
           docker exec ansible-oracle-test bash -c '
-            if systemctl is-active clamd@scan >/dev/null 2>&1 || systemctl is-enabled clamd@scan >/dev/null 2>&1; then
-              echo "✓ ClamAV is installed and configured"
+            # Oracle Linux (RHEL-based, not Fedora) uses clamd service
+            # Check for clamd first, then fallback to other possible service names
+            if systemctl is-active clamd >/dev/null 2>&1 || systemctl is-enabled clamd >/dev/null 2>&1; then
+              echo "✓ ClamAV is installed and configured (clamd service)"
+            elif systemctl is-active clamd@scan >/dev/null 2>&1 || systemctl is-enabled clamd@scan >/dev/null 2>&1; then
+              echo "✓ ClamAV is installed and configured (clamd@scan service)"
+            elif systemctl is-active clamav-daemon >/dev/null 2>&1 || systemctl is-enabled clamav-daemon >/dev/null 2>&1; then
+              echo "✓ ClamAV is installed and configured (clamav-daemon service)"
             else
               echo "✗ ClamAV is not properly configured"
               exit 1
