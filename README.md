@@ -2,7 +2,6 @@
 
 <p align="center">
   <a href="https://github.com/gen0sec/synapse/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-ELv2-green" alt="License - Elastic 2.0"></a> &nbsp;
-  <a href="https://github.com/gen0sec/synapse/actions?query=branch%3Amain"><img src="https://github.com/gen0sec/synapse/actions/workflows/release.yaml/badge.svg" alt="CI Build"></a> &nbsp;
   <a href="https://github.com/gen0sec/synapse/releases"><img src="https://img.shields.io/github/release/gen0sec/synapse.svg?label=Release" alt="Release"></a> &nbsp;
   <img alt="GitHub Downloads (all assets, all releases)" src="https://img.shields.io/github/downloads/gen0sec/synapse/total"> &nbsp;
   <a href="https://docs.gen0sec.com/"><img alt="Static Badge" src="https://img.shields.io/badge/arxignis-documentation-page?style=flat&link=https%3A%2F%2Fdocs.gen0sec.com%2F"></a> &nbsp;
@@ -28,7 +27,7 @@ Synapse is a high-performance reverse proxy and firewall built with Rust, featur
 - **Threat intelligence integration** with Gen0Sec API for real-time protection
 - **CAPTCHA protection** with support for hCaptcha, reCAPTCHA, and Cloudflare Turnstile
 - **Content scanning** with ClamAV integration for malware detection
-<!-- - **PROXY protocol support** for preserving client IP addresses through load balancers -->
+- **PROXY protocol support** for preserving client IP addresses through load balancers
 - **Health check endpoints** for monitoring and load balancer integration
 - **Redis-backed caching** for certificates, threat intelligence, and validation results
 - **Domain filtering** with whitelist support
@@ -42,17 +41,36 @@ Synapse is a high-performance reverse proxy and firewall built with Rust, featur
 
 Synapse can run in two modes:
 
+### Feature Comparison
+
+| Feature | Proxy Mode | Agent Mode |
+|---------|-------------------|------------|
+| **HTTP/HTTPS Reverse Proxy** | ✅ Full support | ❌ Not available |
+| **TLS Certificate Management** | ✅ ACME & custom certificates | ❌ Not available |
+| **Request Forwarding** | ✅ To upstream servers | ❌ Not available |
+| **Upstream Configuration** | ✅ Required | ❌ Not needed |
+| **XDP Packet Filtering** | ✅ Kernel-level filtering | ✅ Kernel-level filtering |
+| **Fully Supported Firewall** | 🚧 Coming soon | 🚧 Coming soon |
+| **Access Rules Enforcement** | ✅ IP allow/block lists | ✅ IP allow/block lists |
+| **Dynamic Access Rules** | ✅ Auto-updates from Gen0Sec API | ✅ Auto-updates from Gen0Sec API |
+| **Threat Intelligence** | ✅ Real-time threat data | ✅ Real-time threat data |
+| **BPF Statistics Collection** | ✅ Packet processing metrics | ✅ Packet processing metrics |
+| **TCP Fingerprinting** | ✅ SYN packet analysis | ✅ SYN packet analysis |
+| **JA4+ Fingerprinting** | ✅ Complete suite (JA4, JA4H, JA4T, JA4L, JA4S, JA4X) | ⚠️ JA4T only (TCP fingerprinting) |
+| **Content Scanning (ClamAV)** | ✅ Malware detection | 🚧 Coming soon |
+| **FIM - File System Monitoring** | ❌ Not available | 🚧 Coming soon |
+| **CAPTCHA Protection** | ✅ hCaptcha, reCAPTCHA, Turnstile | ❌ Not available |
+| **Upstreams Configuration** | ✅ File, Consul, Kubernetes | ❌ Not available |
+| **Hot-reloadable Upstreams** | ✅ Zero-downtime updates | ❌ Not available |
+| **Wirefilter Expressions (WAF)** | ✅ Advanced request filtering | ❌ Not available |
+| **Domain Filtering** | ✅ Whitelist support | ❌ Not available |
+| **Redis Caching** | ✅ Certificates, threat intel, validation | ✅ Threat intel, validation |
+| **Event Queue & Batching** | ✅ Unified batch processing | ✅ Unified batch processing |
+| **Multiple Network Interfaces** | ✅ High availability setups | ✅ High availability setups |
+
 ### Reverse Proxy Mode (Default)
 
 Synapse runs as a full-featured reverse proxy with HTTP/HTTPS support, forwarding requests to upstream servers while applying access rules and threat intelligence at the kernel level.
-
-**Features:**
-- HTTP/HTTPS reverse proxy
-- TLS certificate management (ACME or custom)
-- Request forwarding to upstream servers
-- Access rules enforcement
-- Threat intelligence integration
-- Content scanning and CAPTCHA protection
 
 **Configuration:**
 ```yaml
@@ -71,14 +89,6 @@ synapse --upstream http://localhost:8080 --arxignis-api-key "your-key"
 ### Agent Mode
 
 Synapse runs as a standalone agent focused on access rules enforcement without HTTP/HTTPS proxy functionality. This mode is ideal for network-level protection where you don't need request proxying.
-
-**Features:**
-- XDP-based packet filtering at kernel level
-- Dynamic access rules with automatic updates from Gen0Sec API
-- BPF statistics collection
-- TCP fingerprinting
-- No HTTP/HTTPS proxy servers (no upstream required)
-- Health check server still available (if enabled)
 
 **Configuration:**
 ```yaml
@@ -137,6 +147,29 @@ Configuration from higher priority sources overrides lower priority sources. For
 curl -fSL https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/main/install.sh | sh
 ```
 ✅ Tested with Ubuntu 24.04
+
+### Ansible install
+```bash
+# Clone the repository
+git clone https://github.com/gen0sec/synapse.git
+cd synapse/moat/ansible
+
+# Set up inventory
+cp hosts.example hosts
+# Edit hosts and add your server details
+
+# Run the playbook
+ansible-playbook playbook.yml -e gen0sec_api_token=your_key_here
+```
+
+**Features:**
+- Supports Debian/Ubuntu and RedHat/CentOS/Fedora systems
+- Automatic package detection (.deb/.rpm) with binary fallback
+- Optional ClamAV and Redis installation
+- Optional Fail2Ban integration with Gen0Sec API
+- Modular role-based structure
+
+[More details here.](./ansible/README.md)
 
 ### Kubernetes install
 ```bash
