@@ -10,7 +10,7 @@
     clamav_enabled: true  # Set to false to disable ClamAV installation
     redis_enabled: true   # Set to false to disable Redis installation
     # Fail2Ban integration (optional)
-    fail2ban_enabled: false  # Set to true to enable Fail2Ban integration
+    fail2ban_enabled: true  # Set to true to enable Fail2Ban integration
     gen0sec_expiration: 600  # Block expiration time in seconds (default: 10 minutes)
     fail2ban_jail_enabled: true
     fail2ban_backend: systemd  # Use 'auto' for automatic detection

@@ -38,7 +38,9 @@
 
 - name: Install ClamAV (Debian/Ubuntu)
   ansible.builtin.package:
-    name: clamav
+    name:
+      - clamav
+      - clamav-daemon
     state: present
   when:
     - clamav_enabled | bool
@@ -158,10 +160,16 @@
   ansible.builtin.shell:
     cmd: |
       # Check for specific service instances, avoiding template units (clamd@.service)
-      # Match: clamav-daemon.service, clamd@scan.service, or clamd.service (non-template)
-      systemctl list-unit-files --type=service --no-pager | \
-        grep -E "^(clamav-daemon|clamd@scan|clamd)\.service$" | \
-        head -1 | awk '{print $1}' || echo ""
+      # Try multiple methods to find the service
+      # Method 1: Check systemctl list-unit-files
+      systemctl list-unit-files --type=service --no-pager 2>/dev/null | \
+        grep -E "^(clamav-daemon|clamd@scan|clamd)\.service" | \
+        awk '{print $1}' | head -1 || \
+      # Method 2: Check if service can be shown with systemctl show
+      (systemctl show clamav-daemon.service 2>/dev/null | grep -q "LoadState=loaded" && echo "clamav-daemon.service") || \
+      (systemctl show clamd@scan.service 2>/dev/null | grep -q "LoadState=loaded" && echo "clamd@scan.service") || \
+      (systemctl show clamd.service 2>/dev/null | grep -q "LoadState=loaded" && echo "clamd.service") || \
+      echo ""
   register: clamav_service_found
   changed_when: false
   failed_when: false
@@ -177,7 +185,15 @@
   ansible.builtin.shell:
     cmd: |
       if [ -n "{{ clamav_service_to_enable }}" ]; then
-        systemctl list-unit-files --type=service --no-pager | grep -Fx "{{ clamav_service_to_enable }}" || echo ""
+        # Use systemctl show to check if service exists (more reliable than list-unit-files)
+        # Check with .service suffix first, then without
+        if systemctl show "{{ clamav_service_to_enable }}.service" 2>/dev/null | grep -q "LoadState=loaded"; then
+          echo "{{ clamav_service_to_enable }}.service"
+        elif systemctl show "{{ clamav_service_to_enable }}" 2>/dev/null | grep -q "LoadState=loaded"; then
+          echo "{{ clamav_service_to_enable }}"
+        else
+          echo ""
+        fi
       else
         echo ""
       fi
@@ -202,14 +218,22 @@
 - name: Display ClamAV service status
   ansible.builtin.debug:
     msg: >-
-      {%- if clamav_service_found.stdout != "" -%}
-        ClamAV service {{ 'started successfully' if clamav_service_result is succeeded else 'could not be started' }}
+      {%- if clamav_service_verify.stdout != "" -%}
+        {%- if clamav_service_result is succeeded -%}
+          ClamAV service {{ clamav_service_to_enable }} started and enabled successfully
+        {%- elif clamav_service_result is failed -%}
+          ClamAV service {{ clamav_service_to_enable }} found but could not be started
+        {%- else -%}
+          ClamAV service {{ clamav_service_to_enable }} found
+        {%- endif -%}
+      {%- elif clamav_service_found.stdout != "" -%}
+        ClamAV service {{ clamav_service_found.stdout }} detected but verification failed
       {%- else -%}
         ClamAV is installed but no systemd service found. ClamAV may need to be started manually or configured separately.
       {%- endif -%}
   when:
     - clamav_enabled | bool
-    - clamav_service_found is defined
+    - clamav_service_verify is defined or clamav_service_found is defined
 
 - name: Check if .deb package exists
   ansible.builtin.uri:
