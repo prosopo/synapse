@@ -38,7 +38,7 @@
 
 - name: Install ClamAV (Debian/Ubuntu)
   ansible.builtin.package:
-    name: clamav-daemon
+    name: clamav
     state: present
   when:
     - clamav_enabled | bool
@@ -56,7 +56,9 @@
 
 - name: Install ClamAV (RHEL/CentOS/Fedora)
   ansible.builtin.package:
-    name: clamav
+    name:
+      - clamav
+      - clamav-freshclam
     state: present
   when:
     - clamav_enabled | bool
@@ -100,7 +102,7 @@
   ansible.builtin.set_fact:
     clamav_config_dir: "/etc/clamd.d"
     clamav_config_file: "/etc/clamd.d/scan.conf"
-    clamav_service_name: "clamd"
+    clamav_service_name: "clamd@scan"
   when:
     - clamav_enabled | bool
     - ansible_facts["os_family"] == 'RedHat'
@@ -121,6 +123,7 @@
   loop:
     - "{{ clamav_config_dir | default('/etc/clamav') }}"
     - /etc/systemd/system/clamav-daemon.socket.d
+    - /var/log/clamav/
   when: clamav_enabled | bool
 
 - name: Download ClamAV configuration
@@ -129,6 +132,15 @@
     dest: "{{ clamav_config_file | default('/etc/clamav/clamd.conf') }}"
     mode: '0644'
   when: clamav_enabled | bool
+
+- name: Update ClamAV user to clamscan for RedHat systems
+  ansible.builtin.lineinfile:
+    path: "{{ clamav_config_file | default('/etc/clamav/clamd.conf') }}"
+    regexp: '^User '
+    line: 'User clamscan'
+  when:
+    - clamav_enabled | bool
+    - ansible_facts["os_family"] == 'RedHat'
 
 - name: Download ClamAV systemd override
   ansible.builtin.get_url:
@@ -144,20 +156,46 @@
 
 - name: Check if ClamAV service exists
   ansible.builtin.shell:
-    cmd: systemctl list-unit-files --type=service --no-pager | grep -E "(clamav-daemon|clamd@scan|clamd\.service|clamd@)" | head -1 | awk '{print $1}' || echo ""
+    cmd: |
+      # Check for specific service instances, avoiding template units (clamd@.service)
+      # Match: clamav-daemon.service, clamd@scan.service, or clamd.service (non-template)
+      systemctl list-unit-files --type=service --no-pager | \
+        grep -E "^(clamav-daemon|clamd@scan|clamd)\.service$" | \
+        head -1 | awk '{print $1}' || echo ""
   register: clamav_service_found
+  changed_when: false
+  failed_when: false
+  when: clamav_enabled | bool
+
+- name: Set ClamAV service name for enabling
+  ansible.builtin.set_fact:
+    # Only use detected service if found, otherwise try predefined name
+    clamav_service_to_enable: "{{ clamav_service_found.stdout if clamav_service_found.stdout != '' else clamav_service_name | default('') }}"
+  when: clamav_enabled | bool
+
+- name: Verify ClamAV service exists before enabling
+  ansible.builtin.shell:
+    cmd: |
+      if [ -n "{{ clamav_service_to_enable }}" ]; then
+        systemctl list-unit-files --type=service --no-pager | grep -Fx "{{ clamav_service_to_enable }}" || echo ""
+      else
+        echo ""
+      fi
+  register: clamav_service_verify
   changed_when: false
   failed_when: false
   when: clamav_enabled | bool
 
 - name: Enable and start ClamAV daemon (if service exists)
   ansible.builtin.systemd:
-    name: "{{ clamav_service_found.stdout | default(clamav_service_name | default('clamav-daemon')) }}"
+    name: "{{ clamav_service_to_enable }}"
     enabled: yes
     state: started
   when:
     - clamav_enabled | bool
-    - clamav_service_found.stdout != ""
+    - clamav_service_to_enable is defined
+    - clamav_service_to_enable != ""
+    - clamav_service_verify.stdout != ""
   ignore_errors: true
   register: clamav_service_result
 
