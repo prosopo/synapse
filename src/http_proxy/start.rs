@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use log::{debug, info, warn};
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::{background_service, Opt};
-use pingora_core::server::Server;
+use pingora_core::server::{Server, configuration::ServerConf};
 use std::fs;
 use std::process;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -52,7 +52,22 @@ pub fn run_with_config(config: Option<crate::cli::Config>) {
     }
 
     // Pass None to avoid pingora parsing the config file (we use our own parser above)
-    let mut server = Server::new(None).unwrap();
+    // Configure Pingora to use multi-threaded runtime by setting worker threads
+    // Note: Pingora Server creates its own runtime, so we need to ensure it's multi-threaded
+    // Set TOKIO_WORKER_THREADS environment variable to ensure Pingora uses multiple threads
+    // This must be done before Server::new() creates the runtime
+    let num_cpus_for_pingora = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    unsafe {
+        std::env::set_var("TOKIO_WORKER_THREADS", num_cpus_for_pingora.to_string());
+    }
+    // Configure Pingora ServerConf to use multiple threads
+    // ServerConf is public and has a threads field - we can configure it!
+    let num_cpus_for_pingora = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let mut server_conf = ServerConf::default();
+    server_conf.threads = num_cpus_for_pingora;
+    server_conf.work_stealing = true; // Enable work stealing for better load distribution
+    // Use new_with_opt_and_conf to pass our configured ServerConf
+    let mut server = Server::new_with_opt_and_conf(None, server_conf);
 
     // Store proxy_protocol_enabled before moving maincfg
     let proxy_protocol_enabled = maincfg.proxy_protocol_enabled;
@@ -262,7 +277,11 @@ pub fn run_with_config(config: Option<crate::cli::Config>) {
     server.add_service(proxy);
     server.add_service(bg_srvc);
 
-    thread::spawn(move || server.run_forever());
+    thread::spawn(move || {
+        // Note: server.run_forever() creates its own Tokio runtime internally
+        // This runtime may not respect TOKIO_WORKER_THREADS if Pingora has its own configuration
+        server.run_forever()
+    });
 
     if let (Some(user), Some(group)) = (cfg.rungroup.clone(), cfg.runuser.clone()) {
         crate::utils::tools::drop_priv(

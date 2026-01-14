@@ -57,6 +57,15 @@ use crate::http_client::init_global_client;
 use crate::waf::actions::captcha::{CaptchaConfig, CaptchaProvider, init_captcha_client, start_cache_cleanup_task};
 
 fn main() -> Result<()> {
+    // Set TOKIO_WORKER_THREADS at the very beginning, before any runtime is created
+    // This ensures Pingora and all other runtimes use multiple threads
+    let num_cpus_early = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    if std::env::var("TOKIO_WORKER_THREADS").is_err() {
+        unsafe {
+            std::env::set_var("TOKIO_WORKER_THREADS", num_cpus_early.to_string());
+        }
+    }
+
     // Initialize rustls crypto provider early (must be done before any rustls operations)
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -181,10 +190,13 @@ fn main() -> Result<()> {
     }
 
     // Start the tokio runtime and run the async application
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(async_main(args, config))
+    // TOKIO_WORKER_THREADS is already set at the beginning of main()
+    let num_cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.worker_threads(num_cpus);
+    builder.enable_all();
+    let runtime = builder.build()?;
+    runtime.block_on(async_main(args, config))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -734,26 +746,26 @@ async fn async_main(args: Args, config: Config) -> Result<()> {
     } else {
         // LOCAL MODE: Load security rules from local file
         log::info!("Loading security rules from local file: {}", args.security_rules_config.display());
-        
+
         let security_rules_path = args.security_rules_config.clone();
-        
+
         // Load and initialize WAF from local file
         match worker::config::load_config_from_file(&security_rules_path).await {
             Ok(config_response) => {
                 let num_access_ips = config_response.config.access_rules.block.ips.len();
                 let num_waf_rules = config_response.config.waf_rules.rules.len();
                 log::info!("Loaded {} access rule IPs and {} WAF rules from local file", num_access_ips, num_waf_rules);
-                
+
                 // Store config globally for access rules
                 worker::config::set_global_config(config_response.config.clone());
-                
+
                 // Initialize WAF with local rules
                 if let Err(e) = crate::waf::wirefilter::load_waf_rules(config_response.config.waf_rules.rules).await {
                     log::warn!("Failed to load WAF rules from local file: {}", e);
                 } else {
                     log::info!("HTTP filter initialized from local file with {} WAF rules", num_waf_rules);
                 }
-                
+
                 // Update access rules in XDP if available
                 if !state.skels.is_empty() {
                     if let Err(e) = crate::access_rules::apply_rules_from_global_with_state(&state.skels) {
@@ -766,7 +778,7 @@ async fn async_main(args: Args, config: Config) -> Result<()> {
                 log::error!("HTTP filter will not be initialized. Please check security_rules.yaml");
             }
         }
-        
+
         // Threat intelligence not available in local mode
         log::info!("Threat intelligence client NOT initialized (API key not provided)");
         log::info!("WAF rules using threat.* or ip.src.country fields will not work");
@@ -824,7 +836,7 @@ async fn async_main(args: Args, config: Config) -> Result<()> {
         }
     }
 
-    // Start the old Pingora proxy system in a separate thread (non-blocking)
+    // Start the old Pingora proxy system in a separate OS thread
     // Only start if mode is "proxy" (disabled in agent mode)
     if config.mode == "proxy" {
         let bpf_stats_config = config.bpf_stats.clone();
@@ -834,6 +846,8 @@ async fn async_main(args: Args, config: Config) -> Result<()> {
         let network_config = config.network.clone();
         let tcp_fingerprint_config = config.tcp_fingerprint.clone();
         let pingora_config = config.pingora.clone();
+        // Run Pingora in a separate OS thread
+        // Note: Pingora's run_forever() creates its own runtime, which may be single-threaded
         std::thread::spawn(move || {
             http_proxy::start::run_with_config(Some(crate::cli::Config {
                 mode: "proxy".to_string(),
