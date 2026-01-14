@@ -31,8 +31,8 @@ jobs:
         run: cargo build --verbose
       - name: Test
         run: cargo test --verbose
-      - name: Multi-core Test
-        run: cargo test --test multicore_test --verbose
+      # - name: Multi-core Test - Free github runners is not multi-core
+      #   run: cargo test --test multicore_test --verbose
 
   build-arm64:
     name: Build arm64
@@ -60,5 +60,5 @@ jobs:
         run: cargo build --verbose
       - name: Test
         run: cargo test --verbose
-      - name: Multi-core Test
-        run: cargo test --test multicore_test --verbose
+      # - name: Multi-core Test - Free github runners is not multi-core
+      #   run: cargo test --test multicore_test --verbose

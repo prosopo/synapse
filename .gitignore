@@ -37,6 +37,7 @@ upstreams.yaml
 docker/volumes/
 certs
 .tmp
+upstreams_*.yaml
 !config/config.yaml
 !config/upstreams.yaml
 !config/upstreams_kubernetes.yaml
@@ -45,3 +46,4 @@ certs
 *.rpm
 null
 *.log
+
