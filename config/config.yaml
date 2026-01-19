@@ -126,10 +126,10 @@ geoip:
   # Country database configuration
   country:
     # URL to download GeoIP Country MMDB file
-    url: ""
+    url: "https://github.com/gen0sec/geoip-databases/raw/download/ipinfo_lite.mmdb"
     # Local path to GeoIP Country MMDB file (full path) or directory prefix
-    # Full path example: /var/cache/synapse/GeoLite2-Country.mmdb
-    # Directory prefix example: /var/lib/synapse (will use GeoLite2-Country.mmdb)
+    # Full path example: /var/cache/synapse/ipinfo_lite.mmdb
+    # Directory prefix example: /var/lib/synapse (will use ipinfo_lite.mmdb)
     path: "/var/lib/synapse"
     # Custom headers to add to download requests (optional)
     # Example: {"Authorization": "Bearer token", "X-Custom-Header": "value"}
@@ -138,7 +138,7 @@ geoip:
   # ASN database configuration
   asn:
     # URL to download GeoIP ASN MMDB file
-    url: ""
+    url: "https://github.com/gen0sec/geoip-databases/raw/download/GeoLite2-ASN.mmdb"
     # Local path to GeoIP ASN MMDB file (full path) or directory prefix
     # Full path example: /var/cache/synapse/GeoLite2-ASN.mmdb
     # Directory prefix example: /var/lib/synapse (will use GeoLite2-ASN.mmdb)
@@ -150,7 +150,7 @@ geoip:
   # City database configuration
   city:
     # URL to download GeoIP City MMDB file
-    url: ""
+    url: "https://github.com/gen0sec/geoip-databases/raw/download/GeoLite2-City.mmdb"
     # Local path to GeoIP City MMDB file (full path) or directory prefix
     # Full path example: /var/cache/synapse/GeoLite2-City.mmdb
     # Directory prefix example: /var/lib/synapse (will use GeoLite2-City.mmdb)
