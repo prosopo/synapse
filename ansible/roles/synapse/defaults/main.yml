@@ -5,3 +5,49 @@ synapse_branch: "main"
 gen0sec_api_token: ""  # Gen0Sec API token (used for synapse config)
 clamav_enabled: true  # Set to false to disable ClamAV installation
 redis_enabled: true   # Set to false to disable Redis installation
+
+# Synapse Configuration Options
+# These variables map to config.yaml settings
+# All variables use the prefix synapse_config_* and map to the corresponding config.yaml path
+# Example: synapse_config_mode maps to mode, synapse_config_network_iface maps to network.iface
+# If a variable is not set, the template will use defaults from the original config.yaml
+
+# Application mode: "agent" or "proxy"
+# synapse_config_mode: "agent"  # Default is "agent"
+
+# Network configuration
+# synapse_config_network_iface: "eth0"
+# synapse_config_network_ifaces: []  # List of interfaces, e.g. ["eth0", "eth1"]
+# synapse_config_network_disable_xdp: false
+# synapse_config_network_ip_version: "both"  # "ipv4", "ipv6", or "both"
+
+# Redis configuration
+# synapse_config_redis_url: "redis://127.0.0.1/0"
+# synapse_config_redis_prefix: "g0s:synapse"
+# synapse_config_redis_ssl_ca_cert_path: null
+# synapse_config_redis_ssl_client_cert_path: null
+# synapse_config_redis_ssl_client_key_path: null
+# synapse_config_redis_ssl_insecure: false
+
+# Arxignis/Gen0Sec configuration
+# synapse_config_arxignis_api_key: ""  # Will be set from gen0sec_api_token if not specified
+# synapse_config_arxignis_base_url: "https://api.gen0sec.com/v1"
+# synapse_config_arxignis_log_sending_enabled: true
+# synapse_config_arxignis_include_response_body: true
+# synapse_config_arxignis_max_body_size: 1048576
+
+# Content scanning
+# synapse_config_content_scanning_enabled: false
+# synapse_config_content_scanning_clamav_server: "localhost:3310"
+
+# Logging
+# synapse_config_logging_level: "info"  # error, warn, info, debug, trace
+
+# ACME configuration
+# synapse_config_acme_enabled: true
+# synapse_config_acme_email: null
+# synapse_config_acme_storage_path: "/var/lib/synapse/acme"
+# synapse_config_acme_development: false
+
+# For a complete list of available config options, see the config.yaml template
+# or the original config.yaml file in moat/config/config.yaml

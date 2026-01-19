@@ -20,3 +20,39 @@ fail2ban_enabled: false  # Set to true to enable Fail2Ban integration
 gen0sec_expiration: 600  # Block expiration time in seconds (default: 10 minutes)
 fail2ban_jail_enabled: true
 fail2ban_backend: systemd  # Use 'auto' for automatic detection
+
+# Synapse Configuration Options
+# All config options use the prefix synapse_config_* and map to config.yaml settings
+# Uncomment and modify as needed. See roles/synapse/defaults/main.yml for all available options.
+
+# Network configuration
+# synapse_config_network_iface: "eth0"
+# synapse_config_network_disable_xdp: false
+# synapse_config_network_ip_version: "both"  # "ipv4", "ipv6", or "both"
+
+# Redis configuration
+# synapse_config_redis_url: "redis://127.0.0.1/0"
+# synapse_config_redis_prefix: "g0s:synapse"
+
+# Arxignis/Gen0Sec configuration
+# synapse_config_arxignis_base_url: "https://api.gen0sec.com/v1"
+# synapse_config_arxignis_log_sending_enabled: true
+# synapse_config_arxignis_include_response_body: true
+
+# Content scanning
+# synapse_config_content_scanning_enabled: false
+# synapse_config_content_scanning_clamav_server: "localhost:3310"
+
+# Logging
+# synapse_config_logging_level: "info"  # error, warn, info, debug, trace
+
+# ACME configuration
+# synapse_config_acme_enabled: true
+# synapse_config_acme_email: "admin@example.com"
+# synapse_config_acme_storage_path: "/var/lib/synapse/acme"
+# synapse_config_acme_development: false
+
+# For a complete list of available config options, see:
+# - roles/synapse/defaults/main.yml
+# - roles/synapse/templates/config.yaml.j2
+# - moat/config/config.yaml (original config file)

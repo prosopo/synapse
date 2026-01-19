@@ -367,12 +367,24 @@
     - /var/lib/synapse
     - /etc/synapse
 
-- name: Download config.yaml (binary installation only)
-  ansible.builtin.get_url:
-    url: "https://raw.githubusercontent.com/gen0sec/synapse/refs/heads/{{ synapse_branch }}/config_example.yaml"
+- name: Detect primary network interface if not explicitly set
+  ansible.builtin.set_fact:
+    synapse_config_network_iface: "{{ ansible_default_ipv4.interface | default('eth0') }}"
+  when: synapse_config_network_iface is not defined
+
+- name: Set arxignis API key from gen0sec_api_token if not explicitly set
+  ansible.builtin.set_fact:
+    synapse_config_arxignis_api_key: "{{ gen0sec_api_token }}"
+  when:
+    - gen0sec_api_token != ""
+    - synapse_config_arxignis_api_key is not defined
+
+- name: Generate config.yaml from template
+  ansible.builtin.template:
+    src: config.yaml.j2
     dest: /etc/synapse/config.yaml
     mode: '0640'
-  when: synapse_install_method | default('binary') == 'binary'
+    backup: yes
 
 - name: Download upstreams.yaml (binary installation only)
   ansible.builtin.get_url:
@@ -380,14 +392,6 @@
     dest: /etc/synapse/upstreams.yaml
     mode: '0644'
   when: synapse_install_method | default('binary') == 'binary'
-
-- name: Set API key in config (if provided)
-  ansible.builtin.lineinfile:
-    path: /etc/synapse/config.yaml
-    regexp: '^api_key:'
-    line: "api_key: {{ gen0sec_api_token }}"
-    state: present
-  when: gen0sec_api_token != ""
 
 - name: Enable synapse service
   ansible.builtin.systemd:
