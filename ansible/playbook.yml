@@ -14,6 +14,13 @@
     gen0sec_expiration: 600  # Block expiration time in seconds (default: 10 minutes)
     fail2ban_jail_enabled: true
     fail2ban_backend: systemd  # Use 'auto' for automatic detection
+    # Synapse Configuration Options
+    # All config options use the prefix synapse_config_* and map to config.yaml settings
+    # Examples (uncomment and modify as needed):
+    # synapse_config_network_iface: "eth0"
+    # synapse_config_logging_level: "info"
+    # synapse_config_content_scanning_enabled: false
+    # See roles/synapse/defaults/main.yml for all available options
 
   roles:
     - synapse

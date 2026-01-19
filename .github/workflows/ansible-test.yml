@@ -107,7 +107,7 @@ jobs:
           EOF
           '
 
-      - name: Run Ansible playbook (Ubuntu)
+      - name: Run Ansible playbook - Agent Mode (Ubuntu)
         shell: bash
         run: |
           set -euxo pipefail
@@ -117,7 +117,8 @@ jobs:
               -e synapse_branch="main" \
               -e clamav_enabled=true \
               -e redis_enabled=true \
-              -e fail2ban_enabled=false
+              -e fail2ban_enabled=true \
+              -e synapse_config_mode="agent"
           '
 
       - name: Verify Synapse installation
@@ -177,6 +178,120 @@ jobs:
               echo "✓ Redis is installed"
             else
               echo "✗ Redis is not installed"
+              exit 1
+            fi
+          '
+
+      - name: Verify Agent Mode Configuration
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-ubuntu-test bash -c '
+            if [ ! -f /etc/synapse/config.yaml ]; then
+              echo "✗ Config file not found"
+              exit 1
+            fi
+            # Verify mode is set to agent (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"agent\"|agent)" /etc/synapse/config.yaml; then
+              echo "✓ Mode is set to agent"
+            else
+              echo "✗ Mode is not set to agent"
+              cat /etc/synapse/config.yaml | grep -A 2 "^mode:"
+              exit 1
+            fi
+            # Verify agent mode excludes proxy features
+            if ! grep -q "^redis:" /etc/synapse/config.yaml; then
+              echo "✓ Redis section excluded (agent mode)"
+            else
+              echo "✗ Redis section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^geoip:" /etc/synapse/config.yaml; then
+              echo "✓ GeoIP section excluded (agent mode)"
+            else
+              echo "✗ GeoIP section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^content_scanning:" /etc/synapse/config.yaml; then
+              echo "✓ Content scanning section excluded (agent mode)"
+            else
+              echo "✗ Content scanning section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^pingora:" /etc/synapse/config.yaml; then
+              echo "✓ Pingora section excluded (agent mode)"
+            else
+              echo "✗ Pingora section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^acme:" /etc/synapse/config.yaml; then
+              echo "✓ ACME section excluded (agent mode)"
+            else
+              echo "✗ ACME section should not be present in agent mode"
+              exit 1
+            fi
+          '
+
+      - name: Run Ansible playbook - Proxy Mode (Ubuntu)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec -w /tmp/ansible ansible-ubuntu-test bash -c '
+            ansible-playbook playbook.yml \
+              -e synapse_version="0.3.2" \
+              -e synapse_branch="main" \
+              -e clamav_enabled=true \
+              -e redis_enabled=true \
+              -e fail2ban_enabled=true \
+              -e synapse_config_mode="proxy"
+          '
+
+      - name: Verify Proxy Mode Configuration
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-ubuntu-test bash -c '
+            if [ ! -f /etc/synapse/config.yaml ]; then
+              echo "✗ Config file not found"
+              exit 1
+            fi
+            # Verify mode is set to proxy (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"proxy\"|proxy)" /etc/synapse/config.yaml; then
+              echo "✓ Mode is set to proxy"
+            else
+              echo "✗ Mode is not set to proxy"
+              cat /etc/synapse/config.yaml | grep -A 2 "^mode:"
+              exit 1
+            fi
+            # Verify proxy mode includes all features
+            if grep -q "^redis:" /etc/synapse/config.yaml; then
+              echo "✓ Redis section included (proxy mode)"
+            else
+              echo "✗ Redis section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^geoip:" /etc/synapse/config.yaml; then
+              echo "✓ GeoIP section included (proxy mode)"
+            else
+              echo "✗ GeoIP section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^content_scanning:" /etc/synapse/config.yaml; then
+              echo "✓ Content scanning section included (proxy mode)"
+            else
+              echo "✗ Content scanning section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^pingora:" /etc/synapse/config.yaml; then
+              echo "✓ Pingora section included (proxy mode)"
+            else
+              echo "✗ Pingora section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^acme:" /etc/synapse/config.yaml; then
+              echo "✓ ACME section included (proxy mode)"
+            else
+              echo "✗ ACME section should be present in proxy mode"
               exit 1
             fi
           '
@@ -258,7 +373,7 @@ jobs:
           EOF
           '
 
-      - name: Run Ansible playbook (Oracle)
+      - name: Run Ansible playbook - Agent Mode (Oracle)
         shell: bash
         run: |
           set -euxo pipefail
@@ -268,7 +383,8 @@ jobs:
               -e synapse_branch="main" \
               -e clamav_enabled=true \
               -e redis_enabled=true \
-              -e fail2ban_enabled=false
+              -e fail2ban_enabled=true \
+              -e synapse_config_mode="agent"
           '
 
       - name: Verify Synapse installation
@@ -334,6 +450,120 @@ jobs:
               echo "✓ Redis is installed"
             else
               echo "✗ Redis is not installed"
+              exit 1
+            fi
+          '
+
+      - name: Verify Agent Mode Configuration (Oracle)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-oracle-test bash -c '
+            if [ ! -f /etc/synapse/config.yaml ]; then
+              echo "✗ Config file not found"
+              exit 1
+            fi
+            # Verify mode is set to agent (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"agent\"|agent)" /etc/synapse/config.yaml; then
+              echo "✓ Mode is set to agent"
+            else
+              echo "✗ Mode is not set to agent"
+              cat /etc/synapse/config.yaml | grep -A 2 "^mode:"
+              exit 1
+            fi
+            # Verify agent mode excludes proxy features
+            if ! grep -q "^redis:" /etc/synapse/config.yaml; then
+              echo "✓ Redis section excluded (agent mode)"
+            else
+              echo "✗ Redis section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^geoip:" /etc/synapse/config.yaml; then
+              echo "✓ GeoIP section excluded (agent mode)"
+            else
+              echo "✗ GeoIP section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^content_scanning:" /etc/synapse/config.yaml; then
+              echo "✓ Content scanning section excluded (agent mode)"
+            else
+              echo "✗ Content scanning section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^pingora:" /etc/synapse/config.yaml; then
+              echo "✓ Pingora section excluded (agent mode)"
+            else
+              echo "✗ Pingora section should not be present in agent mode"
+              exit 1
+            fi
+            if ! grep -q "^acme:" /etc/synapse/config.yaml; then
+              echo "✓ ACME section excluded (agent mode)"
+            else
+              echo "✗ ACME section should not be present in agent mode"
+              exit 1
+            fi
+          '
+
+      - name: Run Ansible playbook - Proxy Mode (Oracle)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec -w /tmp/ansible ansible-oracle-test bash -c '
+            ansible-playbook playbook.yml \
+              -e synapse_version="0.3.2" \
+              -e synapse_branch="main" \
+              -e clamav_enabled=true \
+              -e redis_enabled=true \
+              -e fail2ban_enabled=true \
+              -e synapse_config_mode="proxy"
+          '
+
+      - name: Verify Proxy Mode Configuration (Oracle)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker exec ansible-oracle-test bash -c '
+            if [ ! -f /etc/synapse/config.yaml ]; then
+              echo "✗ Config file not found"
+              exit 1
+            fi
+            # Verify mode is set to proxy (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"proxy\"|proxy)" /etc/synapse/config.yaml; then
+              echo "✓ Mode is set to proxy"
+            else
+              echo "✗ Mode is not set to proxy"
+              cat /etc/synapse/config.yaml | grep -A 2 "^mode:"
+              exit 1
+            fi
+            # Verify proxy mode includes all features
+            if grep -q "^redis:" /etc/synapse/config.yaml; then
+              echo "✓ Redis section included (proxy mode)"
+            else
+              echo "✗ Redis section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^geoip:" /etc/synapse/config.yaml; then
+              echo "✓ GeoIP section included (proxy mode)"
+            else
+              echo "✗ GeoIP section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^content_scanning:" /etc/synapse/config.yaml; then
+              echo "✓ Content scanning section included (proxy mode)"
+            else
+              echo "✗ Content scanning section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^pingora:" /etc/synapse/config.yaml; then
+              echo "✓ Pingora section included (proxy mode)"
+            else
+              echo "✗ Pingora section should be present in proxy mode"
+              exit 1
+            fi
+            if grep -q "^acme:" /etc/synapse/config.yaml; then
+              echo "✓ ACME section included (proxy mode)"
+            else
+              echo "✗ ACME section should be present in proxy mode"
               exit 1
             fi
           '
