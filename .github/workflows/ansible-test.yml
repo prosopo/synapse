@@ -191,8 +191,8 @@ jobs:
               echo "✗ Config file not found"
               exit 1
             fi
-            # Verify mode is set to agent
-            if grep -q "^mode: \"agent\"" /etc/synapse/config.yaml; then
+            # Verify mode is set to agent (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"agent\"|agent)" /etc/synapse/config.yaml; then
               echo "✓ Mode is set to agent"
             else
               echo "✗ Mode is not set to agent"
@@ -255,8 +255,8 @@ jobs:
               echo "✗ Config file not found"
               exit 1
             fi
-            # Verify mode is set to proxy
-            if grep -q "^mode: \"proxy\"" /etc/synapse/config.yaml; then
+            # Verify mode is set to proxy (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"proxy\"|proxy)" /etc/synapse/config.yaml; then
               echo "✓ Mode is set to proxy"
             else
               echo "✗ Mode is not set to proxy"
@@ -463,8 +463,8 @@ jobs:
               echo "✗ Config file not found"
               exit 1
             fi
-            # Verify mode is set to agent
-            if grep -q "^mode: \"agent\"" /etc/synapse/config.yaml; then
+            # Verify mode is set to agent (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"agent\"|agent)" /etc/synapse/config.yaml; then
               echo "✓ Mode is set to agent"
             else
               echo "✗ Mode is not set to agent"
@@ -527,8 +527,8 @@ jobs:
               echo "✗ Config file not found"
               exit 1
             fi
-            # Verify mode is set to proxy
-            if grep -q "^mode: \"proxy\"" /etc/synapse/config.yaml; then
+            # Verify mode is set to proxy (handle both quoted and unquoted)
+            if grep -qE "^mode: (\"proxy\"|proxy)" /etc/synapse/config.yaml; then
               echo "✓ Mode is set to proxy"
             else
               echo "✗ Mode is not set to proxy"
