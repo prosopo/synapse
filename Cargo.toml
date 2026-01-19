@@ -57,7 +57,7 @@ bytes = "1.11.0"
 futures = "0.3.31"
 futures-rustls = "0.26.0"
 tls-parser = "0.12.2"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "form"] }
 chrono = { version = "0.4", features = ["serde"] }
 ipnet = "2.9"
 tokio-test = "0.4"
