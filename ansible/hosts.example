@@ -1,13 +1,32 @@
 # Example inventory file
 # Copy this to 'hosts' and configure your target servers
 
-# Single host
-synapse-host
+# Single host (defaults to agent mode)
+# synapse-host ansible_user=root
 
-# Or with connection details:
-# synapse-host ansible_host=192.168.1.100 ansible_user=root
+# With explicit mode (agent = monitoring only, proxy = full reverse proxy)
+# my-agent ansible_host=192.168.1.100 ansible_user=root synapse_config_mode=agent
+# my-proxy ansible_host=192.168.1.101 ansible_user=root synapse_config_mode=proxy
 
-# Or multiple hosts:
-# [synapse-servers]
-# server1 ansible_host=192.168.1.100
-# server2 ansible_host=192.168.1.101
+# Group-based configuration (recommended for multiple hosts)
+# [agents]
+# agent1 ansible_host=192.168.1.100
+# agent2 ansible_host=192.168.1.101
+#
+# [agents:vars]
+# synapse_config_mode=agent
+#
+# [proxies]
+# proxy1 ansible_host=192.168.1.200
+#
+# [proxies:vars]
+# synapse_config_mode=proxy
+# redis_enabled=true
+# clamav_enabled=true
+#
+# [synapse:children]
+# agents
+# proxies
+#
+# [synapse:vars]
+# gen0sec_api_key=your-api-key-here

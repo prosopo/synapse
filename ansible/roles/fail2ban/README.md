@@ -5,7 +5,7 @@ This role configures Fail2Ban with Gen0Sec API integration.
 ## Role Variables
 
 - `fail2ban_enabled`: Enable Fail2Ban integration (default: `false`)
-- `gen0sec_api_token`: Gen0Sec API token (used for both synapse and fail2ban)
+- `gen0sec_api_key`: Gen0Sec API key (used for both synapse and fail2ban)
 - `gen0sec_expiration`: Block expiration time in seconds (default: `600`)
 - `fail2ban_jail_enabled`: Enable fail2ban jails (default: `true`)
 - `fail2ban_backend`: Fail2Ban backend (default: `systemd`)
@@ -27,7 +27,7 @@ Include in a playbook:
     - role: fail2ban
       vars:
         fail2ban_enabled: true
-        gen0sec_api_token: "your_token"
+        gen0sec_api_key: "your_key"
 ```
 
 Or conditionally:

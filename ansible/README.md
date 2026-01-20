@@ -37,7 +37,7 @@ Each role can be used independently or together via the main playbook.
 
    Or pass the API token directly:
    ```bash
-   ansible-playbook playbook.yml -e gen0sec_api_token=your_key_here
+   ansible-playbook playbook.yml -e gen0sec_api_key=your_key_here
    ```
 
 ## Playbook Features
@@ -58,7 +58,7 @@ Each role can be used independently or together via the main playbook.
 
 - `synapse_version`: Version of synapse to install (default: `0.3.2`)
 - `synapse_branch`: GitHub branch for configuration files (default: `main`)
-- `gen0sec_api_token`: Gen0Sec API token (used for both synapse and fail2ban, optional, can be set later)
+- `gen0sec_api_key`: Gen0Sec API key (used for both synapse and fail2ban, optional, can be set later)
 - `clamav_enabled`: Enable ClamAV installation and configuration (default: `true`)
 - `redis_enabled`: Enable Redis installation (default: `true`)
 

@@ -10,34 +10,14 @@
     name: jq
     state: present
 
-- name: Download Gen0Sec action file
-  ansible.builtin.get_url:
-    url: "https://raw.githubusercontent.com/gen0sec/example/refs/heads/main/fail2ban/gen0sec.conf"
+- name: Deploy Gen0Sec action file from template
+  ansible.builtin.template:
+    src: gen0sec.conf.j2
     dest: /etc/fail2ban/action.d/gen0sec.conf
     mode: '0640'
     owner: root
     group: root
-
-- name: Configure Gen0Sec API token
-  ansible.builtin.replace:
-    path: /etc/fail2ban/action.d/gen0sec.conf
-    regexp: '^g0stoken\s*=.*$'
-    replace: 'g0stoken = {{ gen0sec_api_token }}'
-  when: gen0sec_api_token != ""
-
-- name: Configure Gen0Sec expiration
-  ansible.builtin.replace:
-    path: /etc/fail2ban/action.d/gen0sec.conf
-    regexp: '^expiration\s*=\s*<bantime>.*$'
-    replace: 'expiration = {{ gen0sec_expiration }}'
-
-- name: Ensure token is set in configuration file (fallback)
-  ansible.builtin.lineinfile:
-    path: /etc/fail2ban/action.d/gen0sec.conf
-    regexp: '^g0stoken\s*='
-    line: 'g0stoken = {{ gen0sec_api_token }}'
-    state: present
-  when: gen0sec_api_token != ""
+  when: gen0sec_api_key != ""
 
 - name: Configure DEFAULT section in jail.local
   ansible.builtin.blockinfile:

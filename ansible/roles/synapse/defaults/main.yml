@@ -2,7 +2,7 @@
 # Default variables for synapse role
 synapse_version: "0.3.2"
 synapse_branch: "main"
-gen0sec_api_token: ""  # Gen0Sec API token (used for synapse config)
+gen0sec_api_key: ""  # Gen0Sec API key (used for synapse config)
 clamav_enabled: true  # Set to false to disable ClamAV installation
 redis_enabled: true   # Set to false to disable Redis installation
 
@@ -30,7 +30,7 @@ redis_enabled: true   # Set to false to disable Redis installation
 # synapse_config_redis_ssl_insecure: false
 
 # Arxignis/Gen0Sec configuration
-# synapse_config_arxignis_api_key: ""  # Will be set from gen0sec_api_token if not specified
+# synapse_config_arxignis_api_key: ""  # Will be set from gen0sec_api_key if not specified
 # synapse_config_arxignis_base_url: "https://api.gen0sec.com/v1"
 # synapse_config_arxignis_log_sending_enabled: true
 # synapse_config_arxignis_include_response_body: true
