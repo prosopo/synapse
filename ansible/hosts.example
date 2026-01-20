@@ -8,6 +8,10 @@
 # my-agent ansible_host=192.168.1.100 ansible_user=root synapse_config_mode=agent
 # my-proxy ansible_host=192.168.1.101 ansible_user=root synapse_config_mode=proxy
 
+# Per-host API key
+# agent1 ansible_user=root synapse_config_mode=agent gen0sec_api_key=key-for-agent1
+# agent2 ansible_user=root synapse_config_mode=agent gen0sec_api_key=key-for-agent2
+
 # Group-based configuration (recommended for multiple hosts)
 # [agents]
 # agent1 ansible_host=192.168.1.100
