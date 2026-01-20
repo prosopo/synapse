@@ -234,13 +234,13 @@ tcp_fingerprint:
 # Daemon Configuration
 daemon:
   # Enable daemon mode (run as background process)
-  enabled: false
+  enabled: true
 
   # PID file path
   pid_file: "/var/run/synapse.pid"
 
   # Working directory for daemon
-  working_directory: "/"
+  working_directory: "/var/lib/synapse"
 
   # Stdout log file (application logs: info, debug, warn, error)
   stdout: "/var/log/synapse/access.log"
@@ -249,10 +249,10 @@ daemon:
   stderr: "/var/log/synapse/error.log"
 
   # User to run daemon as (optional, e.g., "nobody")
-  user: null
+  user: root
 
   # Group to run daemon as (optional, e.g., "daemon")
-  group: null
+  group: root
 
   # Change ownership of PID file to daemon user/group
   chown_pid_file: true
