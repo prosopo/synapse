@@ -5,7 +5,8 @@
   vars:
     synapse_version: "0.3.2"
     synapse_branch: "main"
-    gen0sec_api_token: ""  # Gen0Sec API token (used for both synapse and fail2ban)
+    g0s_api_key: ""  # Shorthand alias for gen0sec_api_key
+    gen0sec_api_key: "{{ g0s_api_key }}"  # Gen0Sec API key (used for both synapse and fail2ban)
     # Optional services
     clamav_enabled: true  # Set to false to disable ClamAV installation
     redis_enabled: true   # Set to false to disable Redis installation

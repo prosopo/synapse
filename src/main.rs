@@ -614,9 +614,9 @@ async fn async_main(args: Args, config: Config) -> Result<()> {
             } else {
                 log::info!("Threat intelligence client initialized");
 
-                // Register Threat MMDB refresh worker if configured
+                // Register Threat MMDB refresh worker if configured (skip in agent mode)
                 let refresh_interval = config.arxignis.threat.refresh_secs.unwrap_or(300);
-                if !config.arxignis.threat.url.is_empty() && refresh_interval > 0 {
+                if config.mode != "agent" && !config.arxignis.threat.url.is_empty() && refresh_interval > 0 {
                     let worker_config = worker::WorkerConfig {
                         name: "threat_mmdb".to_string(),
                         interval_secs: refresh_interval,

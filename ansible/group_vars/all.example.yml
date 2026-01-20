@@ -9,7 +9,7 @@ synapse_version: "0.3.2"
 synapse_branch: "main"
 
 # Gen0Sec API token (required - used for both synapse and fail2ban)
-gen0sec_api_token: "your_api_key_here"
+gen0sec_api_key: "your_api_key_here"
 
 # Optional services
 clamav_enabled: true  # Set to false to disable ClamAV installation

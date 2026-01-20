@@ -42,6 +42,7 @@
       - clamav
       - clamav-daemon
     state: present
+  register: clamav_debian_install
   when:
     - clamav_enabled | bool
     - ansible_facts["os_family"] == 'Debian'
@@ -63,6 +64,7 @@
       - clamav-freshclam
       - clamd
     state: present
+  register: clamav_redhat_install
   when:
     - clamav_enabled | bool
     - ansible_facts["os_family"] == 'RedHat'
@@ -89,7 +91,9 @@
   register: freshclam_result
   changed_when: true
   failed_when: false
-  when: clamav_enabled | bool
+  when:
+    - clamav_enabled | bool
+    - (clamav_debian_install.changed | default(false)) or (clamav_redhat_install.changed | default(false))
 
 - name: Set ClamAV config directory
   ansible.builtin.set_fact:
@@ -369,14 +373,14 @@
 
 - name: Detect primary network interface if not explicitly set
   ansible.builtin.set_fact:
-    synapse_config_network_iface: "{{ ansible_default_ipv4.interface | default('eth0') }}"
+    synapse_config_network_iface: "{{ ansible_facts['default_ipv4']['interface'] | default('eth0') }}"
   when: synapse_config_network_iface is not defined
 
-- name: Set arxignis API key from gen0sec_api_token if not explicitly set
+- name: Set arxignis API key from gen0sec_api_key if not explicitly set
   ansible.builtin.set_fact:
-    synapse_config_arxignis_api_key: "{{ gen0sec_api_token }}"
+    synapse_config_arxignis_api_key: "{{ gen0sec_api_key }}"
   when:
-    - gen0sec_api_token != ""
+    - gen0sec_api_key != ""
     - synapse_config_arxignis_api_key is not defined
 
 - name: Generate config.yaml from template

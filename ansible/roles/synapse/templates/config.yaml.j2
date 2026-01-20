@@ -40,8 +40,8 @@ redis:
 # Network Configuration
 network:
   # The network interface to attach the XDP program to
-  # Automatically detects primary interface from ansible_default_ipv4.interface if not specified
-  iface: {{ synapse_config_network_iface | default(ansible_default_ipv4.interface | default('eth0')) | quote }}
+  # Automatically detects primary interface from ansible_facts['default_ipv4']['interface'] if not specified
+  iface: {{ synapse_config_network_iface | default(ansible_facts['default_ipv4']['interface'] | default('eth0')) | quote }}
   # Additional network interfaces for XDP attach (overrides iface if set)
   ifaces: {{ synapse_config_network_ifaces | default([]) | to_json }}
   # Disable XDP packet filtering (run without BPF/XDP)
@@ -125,13 +125,13 @@ tcp_fingerprint:
 
 # Daemon Configuration
 daemon:
-  enabled: {{ synapse_config_daemon_enabled | default(false) | lower }}
+  enabled: {{ synapse_config_daemon_enabled | default(true) | lower }}
   pid_file: {{ synapse_config_daemon_pid_file | default('/var/run/synapse.pid') | quote }}
-  working_directory: {{ synapse_config_daemon_working_directory | default('/') | quote }}
+  working_directory: {{ synapse_config_daemon_working_directory | default('/var/lib/synapse') | quote }}
   stdout: {{ synapse_config_daemon_stdout | default('/var/log/synapse/access.log') | quote }}
   stderr: {{ synapse_config_daemon_stderr | default('/var/log/synapse/error.log') | quote }}
-  user: {{ synapse_config_daemon_user | default(None) | to_json }}
-  group: {{ synapse_config_daemon_group | default(None) | to_json }}
+  user: {{ synapse_config_daemon_user | default('root') | to_json }}
+  group: {{ synapse_config_daemon_group | default('root') | to_json }}
   chown_pid_file: {{ synapse_config_daemon_chown_pid_file | default(true) | lower }}
 
 {% if synapse_mode != 'agent' %}
