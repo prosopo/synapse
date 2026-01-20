@@ -3,7 +3,7 @@
   hosts: all
   become: true
   vars:
-    synapse_version: "0.3.2"
+    synapse_version: "0.3.3"
     synapse_branch: "main"
     g0s_api_key: ""  # Shorthand alias for gen0sec_api_key
     gen0sec_api_key: "{{ g0s_api_key }}"  # Gen0Sec API key (used for both synapse and fail2ban)

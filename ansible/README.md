@@ -56,7 +56,7 @@ Each role can be used independently or together via the main playbook.
 
 ### Synapse Variables
 
-- `synapse_version`: Version of synapse to install (default: `0.3.2`)
+- `synapse_version`: Version of synapse to install (default: `0.3.3`)
 - `synapse_branch`: GitHub branch for configuration files (default: `main`)
 - `gen0sec_api_key`: Gen0Sec API key (used for both synapse and fail2ban, optional, can be set later)
 - `clamav_enabled`: Enable ClamAV installation and configuration (default: `true`)

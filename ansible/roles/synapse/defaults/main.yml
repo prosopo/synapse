@@ -1,6 +1,6 @@
 ---
 # Default variables for synapse role
-synapse_version: "0.3.2"
+synapse_version: "0.3.3"
 synapse_branch: "main"
 gen0sec_api_key: ""  # Gen0Sec API key (used for synapse config)
 clamav_enabled: true  # Set to false to disable ClamAV installation

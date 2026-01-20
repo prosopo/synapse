@@ -4,7 +4,7 @@ This role installs and configures synapse.
 
 ## Role Variables
 
-- `synapse_version`: Version of synapse to install (default: `0.3.2`)
+- `synapse_version`: Version of synapse to install (default: `0.3.3`)
 - `synapse_branch`: GitHub branch for configuration files (default: `main`)
 - `gen0sec_api_key`: Gen0Sec API key to set in config.yaml (optional)
 - `clamav_enabled`: Enable ClamAV installation and configuration (default: `true`)
@@ -37,6 +37,6 @@ Or with variables:
   roles:
     - role: synapse
       vars:
-        synapse_version: "0.3.2"
+        synapse_version: "0.3.3"
         gen0sec_api_key: "your_key"
 ```

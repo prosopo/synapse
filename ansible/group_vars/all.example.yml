@@ -3,7 +3,7 @@
 # Copy this file to group_vars/all.yml and set your actual values
 
 # Synapse version to install
-synapse_version: "0.3.2"
+synapse_version: "0.3.3"
 
 # GitHub branch for configuration files
 synapse_branch: "main"
