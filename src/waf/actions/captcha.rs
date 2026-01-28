@@ -22,6 +22,8 @@ pub enum CaptchaProvider {
     ReCaptcha,
     #[serde(rename = "turnstile")]
     Turnstile,
+    #[serde(rename = "prosopo")]
+    Prosopo,
 }
 
 impl Default for CaptchaProvider {
@@ -38,6 +40,7 @@ impl std::str::FromStr for CaptchaProvider {
             "hcaptcha" => Ok(CaptchaProvider::HCaptcha),
             "recaptcha" => Ok(CaptchaProvider::ReCaptcha),
             "turnstile" => Ok(CaptchaProvider::Turnstile),
+            "prosopo" => Ok(CaptchaProvider::Prosopo),
             _ => Err(anyhow::anyhow!("Invalid captcha provider: {}", s)),
         }
     }
@@ -156,6 +159,7 @@ impl CaptchaClient {
             CaptchaProvider::HCaptcha => self.validate_hcaptcha(&request).await?,
             CaptchaProvider::ReCaptcha => self.validate_recaptcha(&request).await?,
             CaptchaProvider::Turnstile => self.validate_turnstile(&request).await?,
+            CaptchaProvider::Prosopo => self.validate_prosopo(&request).await?,
         };
 
         log::info!("Captcha validation result for IP {}: {}", request.ip_address, is_valid);
@@ -436,6 +440,11 @@ impl CaptchaClient {
                 "https://challenges.cloudflare.com/turnstile/v0/api.js",
                 "cf-turnstile",
                 "data-callback=\"onTurnstileSuccess\" data-error-callback=\"onTurnstileError\""
+            ),
+            CaptchaProvider::Prosopo => (
+                "https://js.prosopo.io/js/procaptcha.bundle.js",
+                "procaptcha",
+                "data-callback=\"captchaCallback\""
             ),
         };
 
@@ -810,12 +819,72 @@ impl CaptchaClient {
         Ok(true)
     }
 
+    /// Validate with Prosopo API
+    async fn validate_prosopo(&self, request: &CaptchaValidationRequest) -> Result<bool> {
+        // Use shared HTTP client with keepalive instead of creating new client
+        let client = get_global_reqwest_client()
+            .context("Failed to get global HTTP client")?;
+
+        // The procaptcha-response is a hex string token
+        let token = &request.response_token;
+
+        // Prepare the verification request
+        let mut body = serde_json::Map::new();
+        body.insert("token".to_string(), serde_json::Value::String(token.to_string()));
+        body.insert("secret".to_string(), serde_json::Value::String(request.secret_key.clone()));
+
+        log::info!("Prosopo validation request - token_length: {}, remote_ip: {}",
+                   token.len(), request.ip_address);
+
+        let response = client
+            .post("https://api.prosopo.io/siteverify")
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send Prosopo validation request")?;
+
+        log::info!("Prosopo validation HTTP response - status: {}", response.status());
+
+        if !response.status().is_success() {
+            log::error!("Prosopo service returned non-success status: {}", response.status());
+            return Ok(false);
+        }
+
+        // Parse the response
+        let validation_response: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse Prosopo response")?;
+
+        // Check if verified field is true
+        let is_verified = validation_response
+            .get("verified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if !is_verified {
+            log::info!("Prosopo validation failed - verified: false");
+            return Ok(false);
+        }
+
+        // Log score if available (Premium Tier feature)
+        if let Some(score) = validation_response.get("score").and_then(|s| s.as_f64()) {
+            log::info!("Prosopo validation succeeded with risk score: {}", score);
+        } else {
+            log::info!("Prosopo validation succeeded");
+        }
+
+        Ok(true)
+    }
+
     /// Get the captcha backend response key name for the current provider
     pub fn get_captcha_backend_key(&self) -> &'static str {
         match self.config.provider {
             CaptchaProvider::HCaptcha => "h-captcha-response",
             CaptchaProvider::ReCaptcha => "g-recaptcha-response",
             CaptchaProvider::Turnstile => "cf-turnstile-response",
+            CaptchaProvider::Prosopo => "procaptcha-response",
         }
     }
 

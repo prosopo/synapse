@@ -112,7 +112,7 @@ arxignis:
     # JWT secret key for captcha token signing - openssl rand -base64 48
     jwt_secret: null
 
-    # Captcha provider: hcaptcha, recaptcha, turnstile
+    # Captcha provider: hcaptcha, recaptcha, turnstile, prosopo
     provider: "hcaptcha"
 
     # Captcha token TTL in seconds
